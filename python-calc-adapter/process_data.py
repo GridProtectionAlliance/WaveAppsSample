@@ -86,7 +86,7 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
             if not np.isnan(measurement.value) and measurement.value >= 59.95 and measurement.value <= 60.05:
                 # The following line demonstrates how to use the value of a measurement based on its
                 # linear adjustment factor metadata , i.e., the configured adder and multiplier:
-                #frequency_sum += subscriber.adjustedvalue(measurement)                
+                #frequency_sum += data_proxy.adjustedvalue(measurement)                
                 frequency_sum += measurement.value # raw, unadjusted value
                 frequency_count += 1
 
