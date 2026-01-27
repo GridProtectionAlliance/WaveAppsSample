@@ -25,8 +25,21 @@ from data_proxy import DataProxy
 from sttp.ticks import Ticks
 from sttp.transport.measurement import Measurement
 import numpy as np
-from typing import Dict
+from typing import Dict, Final
 from uuid import UUID
+
+# Alarm event value constants
+RAISED: Final = 1.0
+""" Indicates alarm for event is raised. """
+
+CLEARED: Final = 0.0
+""" Indicates alarm for event is cleared. """
+
+# Other constants used in example
+POWER_ESTIMATE_RATIO : Final = 19530.0  # MW per Hz deviation
+FREQ_MIN: Final = 59.95
+FREQ_MAX: Final = 60.05
+NOMINAL_FREQ: Final = 60.0
 
 def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[np.uint64, Dict[UUID, Measurement]]):
     """
@@ -94,25 +107,63 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
         data_proxy.statusmessage(f"\nNo valid frequency measurements received in second {Ticks.to_datetime(timestamp).second}.")
         return
     
-    average_frequency = frequency_sum / frequency_count
+    avg_frequency = frequency_sum / frequency_count
 
-    data_proxy.statusmessage(f"\nAverage frequency for {frequency_count:,} values in second {Ticks.to_datetime(timestamp).second}: {average_frequency:.6f} Hz")
+    data_proxy.statusmessage(f"\nAverage frequency for {frequency_count:,} values in second {Ticks.to_datetime(timestamp).second}: {avg_frequency:.6f} Hz")
 
     if data_proxy.downsampledcount > 0:
         data_proxy.statusmessage(f"   WARNING: {data_proxy.downsampledcount:,} measurements downsampled in last measurement set...")
         data_proxy.downsampledcount = 0
 
-    if average_frequency < 59.95 or average_frequency > 60.05:
+    # Publish calculated average frequency to WaveApps host
+    data_proxy.publisher.publish_measurements([Measurement(
+        signalid=data_proxy.avg_frequency_signalid,
+        timestamp=timestamp,
+        value=np.float64(avg_frequency)
+    )])
+
+    # Handle frequency excursion event detection operations
+    if avg_frequency < FREQ_MIN or avg_frequency > FREQ_MAX:
+        # Frequency excursion detected - publish event if one is not already active
+        if data_proxy.freq_excursion_eventid is not None:
+            return
+        
+        # Create new event ID
+        data_proxy.freq_excursion_eventid = UUID()
+
         # Calculate estimated MW impact based on frequency excursion
-        power_estimate_ratio = 19530.0  # MW per Hz deviation
-        frequency_delta = average_frequency - 60.0  # Delta would be better from previous second
-        estimated_mw_impact = frequency_delta * power_estimate_ratio # Rough estimate only just for example
+        frequency_delta = avg_frequency - NOMINAL_FREQ  # Delta would be better from previous second
+        estimated_mw_impact = frequency_delta * POWER_ESTIMATE_RATIO # Rough estimate only just for example
         
         # Update event details JSON with calculated MW impact
         event_details = f'''{{
             "description": "Frequency excursion detected with MW of estimated impact of {estimated_mw_impact:.2f} MW",
-            "AverageFrequency": {average_frequency:.6f},
+            "AverageFrequency": {avg_frequency:.6f},
             "EstimatedMW": {estimated_mw_impact:.2f}
         }}'''
 
-        data_proxy.publish_event(Ticks.utcnow(), timestamp, 1.0, event_details)
+        data_proxy.publish_event(
+            data_proxy.freq_excursion_signalid, 
+            data_proxy.freq_excursion_eventid, 
+            Ticks.utcnow(), 
+            timestamp, 
+            RAISED, 
+            event_details)
+    else:
+        if data_proxy.freq_excursion_eventid is None:
+            return
+
+        event_details = f'''{{
+            "description": "Frequency excursion cleared"
+        }}'''
+
+        data_proxy.publish_event(
+            data_proxy.freq_excursion_signalid, 
+            data_proxy.freq_excursion_eventid,
+            Ticks.utcnow(), 
+            timestamp, 
+            CLEARED, 
+            event_details)
+
+        # Clear active event ID when frequency has returned to normal range
+        data_proxy.freq_excursion_eventid = None

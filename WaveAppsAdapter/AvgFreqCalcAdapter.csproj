@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Gemstone.Common" Version="1.0.161" />
+    <PackageReference Include="Gemstone.STTP" Version="1.0.624" />
     <PackageReference Include="Gemstone.Timeseries" Version="1.0.161" />
   </ItemGroup>
 

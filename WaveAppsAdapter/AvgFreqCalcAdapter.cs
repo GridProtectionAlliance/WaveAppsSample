@@ -1,5 +1,5 @@
 ﻿//******************************************************************************************************
-//  MyCalcDataProxyAdapter.cs - Gbtc
+//  AvgFreqCalcAdapter.cs - Gbtc
 //
 //  Copyright © 2026, Grid Protection Alliance.  All Rights Reserved.
 //
@@ -16,28 +16,25 @@
 //
 //  Code Modification History:
 //  ----------------------------------------------------------------------------------------------------
-//  01/09/2026 - Ritchie Carroll
+//  01/09/2026 - J. Ritchie Carroll
 //       Generated original version of source code.
 //
 //******************************************************************************************************
 
-using System.ComponentModel;
-using Gemstone.Timeseries.Adapters;
-
-namespace WaveAppsHostAdapter;
+namespace WaveApps;
 
 /// <summary>
 /// Represents the adapter that exists in the WaveApps host application used to proxy data to and from
 /// the Python calculation.
 /// </summary>
-// TODO: Rename class (and file name) t0 better represent user calculation intent
-public class MyCalcDataProxyAdapter : PythonDataProxyBase
+// TODO: Rename class, file name and project to better represent user calculation intent
+public class AvgFreqCalcAdapter : PythonDataProxyBase
 {
     // Define properties used to configure Python adapter. These configuration values
     // will be sent to the Python calculation adapter during initialization. Below are
     // some standard properties used to configure time-alignment and data processing
     // parameters. Users should add their own properties specific to the calculation
-    // algorithm configuration using a similar pattern.
+    // algorithm configuration using a similar pattern (see TODO below).
 
     /// <summary>
     /// Gets or sets the measurement window size, in whole seconds, for data grouping
@@ -45,7 +42,7 @@ public class MyCalcDataProxyAdapter : PythonDataProxyBase
     [Description("Defines measurement window size, in whole seconds, for data grouping")]
     [ConnectionStringParameter]
     [DefaultValue(5)]
-    [AmbientValue("measurement_windowsize")] // Corresponding Python parameter name
+    [AmbientValue("measurement_windowsize")] // Corresponding Python parameter name (required)
     public int MeasurementWindowSize { get; set; }
 
     /// <summary>
