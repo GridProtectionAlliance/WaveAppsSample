@@ -21,10 +21,11 @@
 #
 # ******************************************************************************************************
 
+import numpy as np
+
 from data_proxy import DataProxy
 from sttp.ticks import Ticks
 from sttp.transport.measurement import Measurement
-import numpy as np
 from typing import Dict, Final
 from uuid import UUID
 

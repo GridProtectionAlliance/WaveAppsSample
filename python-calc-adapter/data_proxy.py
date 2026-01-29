@@ -68,9 +68,9 @@ class DataProxy(Subscriber):
 
     Additionally, this implementation handles data publication back to WaveApps host application.
 
-    NOTE: This is internal functionality used to send and receive data from the WaveApps host application. It is not
-    expected that user will need to modify this code save for adding custom calculation output details and configuration
-    parameters below (see TODO items).
+    NOTE: This class defines internal functionality used to send and receive data from the WaveApps host application. It is
+    not expected that user will need to modify this code save for adding custom calculation output details and configuration
+    parameters below (see TODO: items).
     """
 
     _connection_string_params = {}
@@ -121,7 +121,7 @@ class DataProxy(Subscriber):
         this future time limit, relative to local clock, will be discarded.
         """
 
-        self.samplespersecond: int = self._register_param('samplespersecond', 30)
+        self.samplespersecond: int = self._register_param('samplespersecond', 3000)
         """
         Defines the number of samples per second for the data in the stream.
         """
@@ -472,8 +472,9 @@ class DataProxy(Subscriber):
 
     def define_output_source(self, source_name: str) -> str:
         """
-        Defines an output source for the calculation. This source will be
-        persisted to local XML metadata for future runs.
+        Defines an output source for the calculation, i.e., a virtual device in the
+        configuration used to group output measurements. This source will be persisted
+        to local XML metadata for future runs.
 
         Parameters
         ----------

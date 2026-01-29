@@ -3,7 +3,7 @@
 This example defines a Python calculation adapter that sends data to and from the WaveApps host application.
 
 ## Key User Tasks
-1. Add custom configuration parameters for calculation algorithm (these will be synchronized to WaveApps C# proxy adapter).
+1. Modify `data_proxy.py`, `__init__` function, to define outputs and add any custom configuration parameters for calculation algorithm (these will be synchronized to WaveApps C# proxy adapter).
 2. Modify `process_data` to implement desired calculation algorithm.
 
 ## Usage

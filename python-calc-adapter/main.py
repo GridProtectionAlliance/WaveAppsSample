@@ -25,8 +25,9 @@ import argparse
 from data_proxy import DataProxy
 from process_data import process_data
 from gsf import Limits
+from typing import Final
 
-MAXPORT = Limits.MAXUINT16
+MAXPORT: Final = Limits.MAXUINT16
 
 def main():
     parser = argparse.ArgumentParser()
