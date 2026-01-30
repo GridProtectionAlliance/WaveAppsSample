@@ -470,6 +470,10 @@ class DataProxy(Subscriber):
     def _publisher_usercommand_receiver(self, connection: SubscriberConnection, command: ServerCommand, data: bytes):
         self.statusmessage(f"[PUB] Received user command {command} from client: {connection.connection_id}")
 
+        if command == ServerCommand.USERCOMMAND00:
+            # Client is notifying us that configuration has changed, instruct subscriber to request new metadata
+            self.request_metadata()
+
     def define_output_source(self, source_name: str) -> str:
         """
         Defines an output source for the calculation, i.e., a virtual device in the

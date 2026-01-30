@@ -70,6 +70,11 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     
     private class ProxyDataSubscriber : DataSubscriber
     {
+        /// <summary>
+        /// Occurs when metadata synchronization is complete.
+        /// </summary>
+        public event EventHandler? MetadataSyncComplete;
+        
         /// <inheritdoc />
         public override DataSet? DataSource
         {
@@ -81,9 +86,17 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
                 base.DataSource = value;
 
+                // Notify Python calculation adapter of configuration change
                 if (CommandChannelConnected)
                     SendServerCommand(ServerCommand.UserCommand00);
             }
+        }
+
+        /// <inheritdoc />
+        protected override void OnConfigurationChanged()
+        {
+            base.OnConfigurationChanged();
+            MetadataSyncComplete?.SafeInvoke(this, EventArgs.Empty);
         }
     }
 
@@ -109,7 +122,10 @@ public class PythonDataProxyBase : FacileActionAdapterBase
             base.DataSource = value;
 
             if (m_proxyDataSubscriber is not null)
+            {
                 m_proxyDataSubscriber.DataSource = value;
+                SynchronizeOutputMeasurements();
+            }
 
             if (m_proxyDataPublisher is not null)
                 m_proxyDataPublisher.DataSource = value;
@@ -244,7 +260,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher.Name = $"{Name}_DataProxyPublisher";
         m_proxyDataPublisher.UseBaseTimeOffsets = true;
         m_proxyDataPublisher.AllowPayloadCompression = true;
-        m_proxyDataPublisher.ConnectionString = $"commandChannel={{port={HostAdapterPublisherPort}}}";
+        m_proxyDataPublisher.ConnectionString = $$"""commandChannel={port={{HostAdapterPublisherPort}}}""";
         m_proxyDataPublisher.Initialize();
 
         // Start publisher
@@ -259,11 +275,24 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataSubscriber.ConnectionTerminated += m_proxyDataSubscriber_ConnectionTerminated;
         m_proxyDataSubscriber.NewMeasurements += m_proxyDataSubscriber_NewMeasurements;
         m_proxyDataSubscriber.MetaDataReceived += m_proxyDataSubscriber_MetaDataReceived;
+        m_proxyDataSubscriber.MetadataSyncComplete += m_proxyDataSubscriber_MetadataSyncComplete;
         m_proxyDataSubscriber.ReceivedUserCommandResponse += m_proxyDataSubscriber_ReceivedUserCommandResponse;
 
-        m_proxyDataSubscriber.ConnectionString = $"server=localhost:{PythonCalcPublisherPort}";
-        m_proxyDataSubscriber.OperationalModes |= OperationalModes.CompressMetadata | OperationalModes.CompressSignalIndexCache | OperationalModes.CompressPayloadData | OperationalModes.ReceiveInternalMetadata | OperationalModes.ReceiveExternalMetadata;
-        m_proxyDataSubscriber.CompressionModes = CompressionModes.TSSC | CompressionModes.GZip;
+        m_proxyDataSubscriber.Name = $"{Name}_DataProxySubscriber";
+        m_proxyDataSubscriber.ConnectionString = 
+            $$"""
+              server=localhost:{{PythonCalcPublisherPort}}; 
+              interface=0.0.0.0; 
+              autoConnect=true; 
+              compression=true; 
+              internal=true; 
+              useSourcePrefixNames=false; 
+              securityMode=None; 
+              outputMeasurements={FILTER ActiveMeasurements WHERE Protocol = 'STTP'}; 
+              receiveInternalMetadata=true; 
+              receiveExternalMetadata=true
+              """;
+        
         m_proxyDataSubscriber.Initialize();
 
         // Start subscriber
@@ -323,6 +352,18 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher?.QueueMeasurementsForProcessing(measurements);
     }
 
+    private void SynchronizeOutputMeasurements()
+    {
+        // Reapply output measurements if reinitializing - this way filter expressions and/or sourceIDs
+        // will be reapplied. This can be important after a meta-data refresh which may have added new
+        // measurements that could now be applicable as desired output measurements.
+        OutputMeasurements = m_proxyDataSubscriber?.OutputMeasurements;
+
+        #pragma warning disable CA2245
+        OutputSourceIDs = OutputSourceIDs;
+        #pragma warning restore CA2245
+    }
+
     private void m_proxyDataPublisher_StatusMessage(object? sender, EventArgs<string> e)
     {
         OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: {e.Argument}", nameof(m_proxyDataPublisher_StatusMessage));
@@ -350,9 +391,9 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         bool success = m_proxyDataPublisher?.SendUserCommandResponse(clientID, ServerResponse.UserResponse02, ServerCommand.UserCommand02, Encoding.UTF8.GetBytes(connectionString)) ?? false;
         
         if (success)
-            OnStatusMessage(MessageLevel.Info, $"Successfully sent serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
+            OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: Successfully sent serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
         else
-            OnStatusMessage(MessageLevel.Error, $"Failed to send serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
+            OnStatusMessage(MessageLevel.Error, $"[Data Proxy Publisher]: Failed to send serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
     }
 
     private void m_proxyDataSubscriber_StatusMessage(object? sender, EventArgs<string> e)
@@ -367,16 +408,8 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
     private void m_proxyDataSubscriber_ConnectionEstablished(object? sender, EventArgs e)
     {
-        OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Connection established, subscribing to outputs...");
-
-        // We subscribe to all outputs from Python calculation adapter
-        SubscriptionInfo subscriptionInfo = new() { FilterExpression = "FILTER ActiveMeasurements WHERE True" };
-        bool success = m_proxyDataSubscriber?.Subscribe(subscriptionInfo) ?? false;
-        
-        if (success)
-            OnStatusMessage(MessageLevel.Info, "Successfully subscribed to Python calculation adapter outputs.");
-        else
-            OnStatusMessage(MessageLevel.Error, "Failed to subscribe to Python calculation adapter outputs.");
+        OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Connection established, synchronizing outputs with host...");
+        SynchronizeOutputMeasurements();
     }
 
     private void m_proxyDataSubscriber_ConnectionTerminated(object? sender, EventArgs e)
@@ -392,9 +425,13 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
     private void m_proxyDataSubscriber_MetaDataReceived(object? sender, EventArgs<DataSet> e)
     {
-        OnStatusMessage(MessageLevel.Info, "Received metadata from Python calculation adapter");
+        OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Received metadata from Python calculation adapter");
+    }
 
-        // TODO: Automatically create new local measurements based on received metadata, then ensure host OutputMeasurements is updated accordingly
+    private void m_proxyDataSubscriber_MetadataSyncComplete(object? sender, EventArgs e)
+    {
+        OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Metadata synchronization from Python calculation adapter complete");
+        OnConfigurationChanged();
     }
 
     private void m_proxyDataSubscriber_ReceivedUserCommandResponse(object? sender, DataSubscriber.UserCommandArgs e)
@@ -408,7 +445,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         switch (response)
         {
             case ServerResponse.UserResponse00 when command == ServerCommand.UserCommand00:
-                OnStatusMessage(MessageLevel.Info, "Received configuration changed notification from Python calculation adapter");
+                OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Received configuration changed notification from Python calculation adapter");
                 m_proxyDataSubscriber?.RefreshMetadata();
                 break;
             // The 'UserResponse02' used for sending serialized property values to Python adapter is on a different
@@ -417,44 +454,44 @@ public class PythonDataProxyBase : FacileActionAdapterBase
             // 'UserResponse03' for clarity and to reduce confusion when reviewing the code.
             case ServerResponse.UserResponse03 when command == ServerCommand.UserCommand03:
             {
-                OnStatusMessage(MessageLevel.Info, $"Processing {length:N0}-byte event publication request from Python calculation adapter");
+                OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: Processing {length:N0}-byte event publication request from Python calculation adapter");
 
                 string connectionString = Encoding.UTF8.GetString(buffer, startIndex, length);
                 Dictionary<string, string> settings = connectionString.ParseKeyValuePairs();
 
                 if (!settings.TryGetValue("SignalID", out string? setting) || !Guid.TryParse(setting, out Guid signalID))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'SignalID' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'SignalID' parameter");
                     return;
                 }
                 
                 if (!settings.TryGetValue("EventID", out setting) || !Guid.TryParse(setting, out Guid eventID))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'EventID' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'EventID' parameter");
                     return;
                 }
 
                 if (!settings.TryGetValue("Timestamp", out setting) || !Ticks.TryParse(setting, out Ticks timestamp))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'Timestamp' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Timestamp' parameter");
                     return;
                 }
                 
                 if (!settings.TryGetValue("AlarmTimestamp", out setting) || !Ticks.TryParse(setting, out Ticks alarmTimestamp))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'AlarmTimestamp' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'AlarmTimestamp' parameter");
                     return;
                 }
                 
                 if (!settings.TryGetValue("Value", out setting) || !double.TryParse(setting, out double value))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'Value' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Value' parameter");
                     return;
                 }
                 
                 if (!settings.TryGetValue("EventDetails", out string? eventDetails))
                 {
-                    OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'EventDetails' parameter");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'EventDetails' parameter");
                     return;
                 }
 
@@ -462,7 +499,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
                 if (alarmKey == MeasurementKey.Undefined)
                 {
-                    OnStatusMessage(MessageLevel.Error, "Failed to process Python event publication request, cannot find measurement key for specified 'SignalID'");
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Failed to process Python event publication request, cannot find measurement key for specified 'SignalID'");
                     return;
                 }
 
@@ -500,7 +537,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
                     if (record is null)
                     {
-                        OnStatusMessage(MessageLevel.Error, $"Failed to find existing event record \"{eventID}\" to update end of event");
+                        OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to find existing event record \"{eventID}\" to update end of event");
                         return;
                     }
 
@@ -512,7 +549,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                 break;
             }
             default:
-                OnStatusMessage(MessageLevel.Warning, $"Received unhandled {length:N0}-byte user server response {response} for command {command} from Python calculation adapter");
+                OnStatusMessage(MessageLevel.Warning, $"[Python Proxy Subscriber]: Received unhandled {length:N0}-byte user server response {response} for command {command} from Python calculation adapter");
                 break;
         }
     }

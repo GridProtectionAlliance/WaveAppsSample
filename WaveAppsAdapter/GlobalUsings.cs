@@ -8,6 +8,7 @@ global using Gemstone;
 global using Gemstone.Data;
 global using Gemstone.Data.Model;
 global using Gemstone.Diagnostics;
+global using Gemstone.EventHandlerExtensions;
 global using Gemstone.StringExtensions;
 global using Gemstone.Timeseries;
 global using Gemstone.Timeseries.Adapters;
