@@ -21,6 +21,9 @@
 //
 //******************************************************************************************************
 // ReSharper disable SwitchStatementHandlesSomeKnownEnumValuesWithDefault
+// ReSharper disable UnusedMember.Local
+
+using System.Diagnostics;
 
 namespace WaveApps;
 
@@ -60,6 +63,9 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         /// <returns><c>true</c> if send was successful; otherwise <c>false</c>.</returns>
         public bool SendUserCommandResponse(Guid clientID, ServerResponse response, ServerCommand command, byte[]? data = null)
         {
+            if (response is < ServerResponse.UserResponse00 or > ServerResponse.UserResponse15)
+                throw new ArgumentOutOfRangeException(nameof(response), "Response must be a user response between UserResponse00 and UserResponse15");
+
             return SendClientResponse(clientID, response, command, data);
         }
     }
@@ -86,6 +92,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     // Fields
     private ProxyDataPublisher? m_proxyDataPublisher;
     private ProxyDataSubscriber? m_proxyDataSubscriber;
+    private Process? m_pythonProcess;
     private bool m_disposed;
 
     #endregion
@@ -132,6 +139,22 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines the unique Python calculation adapter publisher port")]
     [ConnectionStringParameter]
     public ushort PythonCalcPublisherPort { get; set; }
+    
+    /// <summary>
+    /// Gets or sets flag that determines if Python calculation adapter will be automatically launched when host adapter is initialized.
+    /// </summary>
+    [Description("Defines flag that determines if Python calculation adapter will be automatically launched when host adapter is initialized.")]
+    [ConnectionStringParameter]
+    [DefaultValue(false)]
+    public bool AutoLaunchPythonAdapter { get; set; }
+
+    /// <summary>
+    /// Gets or sets command line that will launch Python calculation adapter. Ensure absolute file path to main Python file is defined.
+    /// </summary>
+    [Description("Defines command line that will launch Python calculation adapter. Ensure absolute file path to main Python file is defined.")]
+    [ConnectionStringParameter]
+    [DefaultValue("python -OO -X no_debug_ranges --disable-gil main.py localhost {HostAdapterPublisherPort} {PythonCalcPublisherPort}")]
+    public string PythonLaunchCommand { get; set; } = null!;
 
     /// <inheritdoc />
     public override bool SupportsTemporalProcessing => false;
@@ -153,6 +176,21 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         {
             if (!disposing)
                 return;
+
+            if (m_pythonProcess is not null)
+            {
+                m_pythonProcess.CancelOutputRead();
+                m_pythonProcess.CancelErrorRead();
+
+                m_pythonProcess.Exited -= m_pythonProcess_Exited;
+                m_pythonProcess.OutputDataReceived -= m_pythonProcess_OutputDataReceived;
+                m_pythonProcess.ErrorDataReceived -= m_pythonProcess_ErrorDataReceived;
+                
+                // TODO: Consider sending termination signal (custom command) to Python adapter
+                m_pythonProcess.Kill();
+                m_pythonProcess.Close();
+
+            }
 
             if (m_proxyDataPublisher is not null)
             {
@@ -232,6 +270,42 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
         // Start subscriber
         m_proxyDataSubscriber.Start();
+
+        // Automatically launch Python calculation adapter when configured to do so
+        if (!AutoLaunchPythonAdapter)
+            return;
+
+        if (string.IsNullOrWhiteSpace(PythonLaunchCommand))
+            throw new ArgumentException($"{nameof(PythonLaunchCommand)} is not defined, cannot launch Python calculation adapter");
+        
+        string[] args = PythonLaunchCommand.Split(' ');
+
+        if (args.Length < 2)
+            throw new ArgumentException($"{nameof(PythonLaunchCommand)} has no defined arguments, cannot launch Python calculation adapter");
+
+        ProcessStartInfo startInfo = new(args[0], string.Join(' ', args[1..]))
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            ErrorDialog = false,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        m_pythonProcess = new Process();
+        m_pythonProcess.StartInfo = startInfo;
+        m_pythonProcess.EnableRaisingEvents = true;
+        m_pythonProcess.Exited += m_pythonProcess_Exited;
+        m_pythonProcess.OutputDataReceived += m_pythonProcess_OutputDataReceived;
+        m_pythonProcess.ErrorDataReceived += m_pythonProcess_ErrorDataReceived;
+        
+        m_pythonProcess.Start();
+        
+        m_pythonProcess.BeginOutputReadLine();
+        m_pythonProcess.BeginErrorReadLine();
     }
 
     /// <inheritdoc />
@@ -375,7 +449,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                     return;
                 }
                 
-                if (!settings.TryGetValue("EventDetails", out string? eventDetailsJson))
+                if (!settings.TryGetValue("EventDetails", out string? eventDetails))
                 {
                     OnStatusMessage(MessageLevel.Error, "Cannot process Python event publication request, failed to parse 'EventDetails' parameter");
                     return;
@@ -411,7 +485,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                         EventGuid = eventID,
                         Type = "PythonProxyCalc",
                         MeasurementID = signalID,
-                        Details = eventDetailsJson
+                        Details = eventDetails
                     };
 
                     tableOperations.AddNewRecord(record);
@@ -438,6 +512,23 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                 OnStatusMessage(MessageLevel.Warning, $"Received unhandled {length:N0}-byte user server response {response} for command {command} from Python calculation adapter");
                 break;
         }
+    }
+
+    private void m_pythonProcess_Exited(object? sender, EventArgs e)
+    {
+        OnStatusMessage(MessageLevel.Warning, "Python calculation adapter exited unexpectedly");
+    }
+
+    private void m_pythonProcess_OutputDataReceived(object sender, DataReceivedEventArgs e)
+    {
+        if (e.Data is not null)
+            OnStatusMessage(MessageLevel.Info, e.Data);
+    }
+
+    private void m_pythonProcess_ErrorDataReceived(object sender, DataReceivedEventArgs e)
+    {
+        if (e.Data is not null)
+            OnStatusMessage(MessageLevel.Error, e.Data);
     }
 
     #endregion
