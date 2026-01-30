@@ -2,6 +2,7 @@
 
 global using System.ComponentModel;
 global using System.Data;
+global using System.Diagnostics;
 global using System.Text;
 global using Gemstone;
 global using Gemstone.Data;

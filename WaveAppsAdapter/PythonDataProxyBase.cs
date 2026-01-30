@@ -23,8 +23,6 @@
 // ReSharper disable SwitchStatementHandlesSomeKnownEnumValuesWithDefault
 // ReSharper disable UnusedMember.Local
 
-using System.Diagnostics;
-
 namespace WaveApps;
 
 /// <summary>
