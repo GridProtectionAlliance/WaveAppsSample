@@ -281,7 +281,12 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         if (args.Length < 2)
             throw new ArgumentException($"{nameof(PythonLaunchCommand)} has no defined arguments, cannot launch Python calculation adapter");
 
-        ProcessStartInfo startInfo = new(args[0], string.Join(' ', args[1..]))
+        string pythonExe = args[0];
+        string argumentList = string.Join(' ', args[1..])
+            .Replace("{HostAdapterPublisherPort}", HostAdapterPublisherPort.ToString())
+            .Replace("{PythonCalcPublisherPort}", PythonCalcPublisherPort.ToString());
+
+        ProcessStartInfo startInfo = new(pythonExe, argumentList)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
