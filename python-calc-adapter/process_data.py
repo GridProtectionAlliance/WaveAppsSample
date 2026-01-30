@@ -22,6 +22,7 @@
 # ******************************************************************************************************
 
 import numpy as np
+import uuid
 
 from data_proxy import DataProxy
 from sttp.ticks import Ticks
@@ -37,7 +38,7 @@ CLEARED: Final = 0.0
 """ Indicates alarm for event is cleared. """
 
 # Other constants used in example
-POWER_ESTIMATE_RATIO : Final = 19530.0  # MW per Hz deviation
+POWER_ESTIMATE_RATIO: Final = 19530.0  # MW per Hz deviation
 FREQ_MIN: Final = 59.95
 FREQ_MAX: Final = 60.05
 NOMINAL_FREQ: Final = 60.0
@@ -130,11 +131,11 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
             return
         
         # Create new event ID
-        data_proxy.freq_excursion_eventid = UUID()
+        data_proxy.freq_excursion_eventid = uuid.uuid4()
 
         # Calculate estimated MW impact based on frequency excursion
         frequency_delta = avg_frequency - NOMINAL_FREQ  # Delta would be better from previous second
-        estimated_mw_impact = frequency_delta * POWER_ESTIMATE_RATIO # Rough estimate only just for example
+        estimated_mw_impact = frequency_delta * POWER_ESTIMATE_RATIO  # Rough estimate only just for example
         
         # Update event details JSON with calculated MW impact
         event_details = f'''{{
@@ -154,17 +155,12 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
         if data_proxy.freq_excursion_eventid is None:
             return
 
-        event_details = f'''{{
-            "description": "Frequency excursion cleared"
-        }}'''
-
         data_proxy.publish_event(
             data_proxy.freq_excursion_signalid, 
             data_proxy.freq_excursion_eventid,
             Ticks.utcnow(), 
             timestamp, 
-            CLEARED, 
-            event_details)
+            CLEARED)
 
         # Clear active event ID when frequency has returned to normal range
         data_proxy.freq_excursion_eventid = None

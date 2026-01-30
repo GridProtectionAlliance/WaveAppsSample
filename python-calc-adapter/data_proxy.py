@@ -252,7 +252,7 @@ class DataProxy(Subscriber):
 
         self._groupeddata_receiver = callback
 
-    def publish_event(self, signalid: UUID, eventid: UUID, timestamp: np.uint64, alarm_timestamp: np.uint64, value: float | np.float64, event_details_json: str):
+    def publish_event(self, signalid: UUID, eventid: UUID, timestamp: np.uint64, alarm_timestamp: np.uint64, value: float | np.float64, event_details: str = ""):
         """
         Publishes an event to connected WaveApps host application clients.
 
@@ -262,11 +262,11 @@ class DataProxy(Subscriber):
             timestamp:          The event timestamp in ticks (100-nanosecond intervals since 1/1/0001)
             alarm_timestamp:    The alarm timestamp in ticks (100-nanosecond intervals since 1/1/0001)
             value:              The event value
-            event_details_json: The event details in JSON format
+            event_details:      The event details in JSON format
         """
 
         # Serialize parameters to a connection string format
-        connection_string = f"SignalID={signalid};EventID={eventid};Timestamp={timestamp};AlarmTimestamp={alarm_timestamp};Value={value};EventDetails={event_details_json}"
+        connection_string = f"SignalID={signalid};EventID={eventid};Timestamp={timestamp};AlarmTimestamp={alarm_timestamp};Value={value};EventDetails={event_details}"
         
         # Notify all subscribers of the event (only expecting one) using user response 3
         self.publisher.broadcast_userresponse(ServerResponse.USERRESPONSE03, ServerCommand.USERCOMMAND03, connection_string.encode('utf-8'))
