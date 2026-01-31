@@ -131,7 +131,21 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                 m_proxyDataPublisher.DataSource = value;
         }
     }
-    
+
+    public override MeasurementKey[]? InputMeasurementKeys
+    {
+        get => base.InputMeasurementKeys;
+        set
+        {
+            base.InputMeasurementKeys = value;
+
+            if (value is null || m_proxyDataPublisher is null)
+                return;
+
+            m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
+        }
+    }
+
     /// <summary>
     /// Gets or sets the unique WaveApps host adapter publisher port.
     /// </summary>
@@ -167,7 +181,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     /// </summary>
     [Description("Defines command line that will launch Python calculation adapter. Ensure absolute file path to main Python file is defined.")]
     [ConnectionStringParameter]
-    [DefaultValue("python -OO -X no_debug_ranges --disable-gil main.py localhost {HostAdapterPublisherPort} {PythonCalcPublisherPort}")]
+    [DefaultValue($"python -OO -X no_debug_ranges --disable-gil main.py localhost {{{nameof(HostAdapterPublisherPort)}}} {{{nameof(PythonCalcPublisherPort)}}}")]
     public string PythonLaunchCommand { get; set; } = null!;
 
     /// <inheritdoc />
@@ -260,7 +274,9 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher.Name = $"{Name}_DataProxyPublisher";
         m_proxyDataPublisher.UseBaseTimeOffsets = true;
         m_proxyDataPublisher.AllowPayloadCompression = true;
-        m_proxyDataPublisher.ConnectionString = $$"""commandChannel={port={{HostAdapterPublisherPort}}}""";
+        m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
+        m_proxyDataPublisher.ConnectionString = $"commandChannel={{port={HostAdapterPublisherPort}}}";
+
         m_proxyDataPublisher.Initialize();
 
         // Start publisher
@@ -312,8 +328,8 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
         string pythonExe = args[0];
         string argumentList = string.Join(' ', args[1..])
-            .Replace("{HostAdapterPublisherPort}", HostAdapterPublisherPort.ToString())
-            .Replace("{PythonCalcPublisherPort}", PythonCalcPublisherPort.ToString());
+            .Replace($"{{{nameof(HostAdapterPublisherPort)}}}", HostAdapterPublisherPort.ToString())
+            .Replace($"{{{nameof(PythonCalcPublisherPort)}}}", PythonCalcPublisherPort.ToString());
 
         ProcessStartInfo startInfo = new(pythonExe, argumentList)
         {
@@ -350,6 +366,37 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     {
         // Take measurements received from host and send to Python calculation adapter via proxy publisher
         m_proxyDataPublisher?.QueueMeasurementsForProcessing(measurements);
+    }
+
+    private string GetFilteredMetadataTables()
+    {
+        // Configured input measurement keys define measurements to be published to Python adapter
+        string inputSignalIDs = InputMeasurementKeys is { Length: > 0 } ?
+            string.Join(',', InputMeasurementKeys.Select(key => $"'{key.SignalID:D}'")) :
+            $"'{Guid.Empty}'";
+
+        // Filter metadata to be published down to these inputs for simplicity and optimal minimal metadata transmission
+        return $"""
+                SELECT UniqueID, OriginalSource, IsConcentrator, Acronym, Name, AccessID, ParentAcronym, CompanyAcronym, VendorAcronym, VendorDeviceName, Longitude, Latitude, InterconnectionName, ContactList, Enabled, UpdatedOn
+                  FROM DeviceDetail
+                  WHERE IsConcentrator = 0 AND EXISTS (
+                    SELECT 1
+                      FROM MeasurementDetail
+                      WHERE MeasurementDetail.DeviceAcronym = DeviceDetail.Acronym AND 
+                            MeasurementDetail.SignalID IN ({inputSignalIDs}));
+                SELECT DeviceAcronym, ID, SignalID, PointTag, AlternateTag, SignalReference, SignalAcronym, PhasorSourceIndex, Description, Internal, Enabled, UpdatedOn
+                  FROM MeasurementDetail
+                  WHERE SignalID IN ({inputSignalIDs});
+                SELECT ID, DeviceAcronym, Label, Type, Phase, PrimaryVoltageID, SecondaryVoltageID, SourceIndex, BaseKV, UpdatedOn
+                  FROM PhasorDetail
+                  WHERE EXISTS (
+                    SELECT 1
+                      FROM MeasurementDetail
+                      WHERE MeasurementDetail.DeviceAcronym = PhasorDetail.DeviceAcronym AND
+                            MeasurementDetail.SignalID IN ({inputSignalIDs}));
+                SELECT TOP 1 Version AS VersionNumber
+                  FROM VersionInfo AS SchemaVersion
+                """;
     }
 
     private void SynchronizeOutputMeasurements()
