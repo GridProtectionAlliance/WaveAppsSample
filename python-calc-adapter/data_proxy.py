@@ -496,6 +496,8 @@ class DataProxy(Subscriber):
         # Remove any characters not matching the allowed pattern
         acronym = re.sub(r'[^A-Z0-9\-!_\.@#\$]', '', acronym)
         
+        self.statusmessage(f"Defining output source '{source_name}' with acronym '{acronym}' using metadata file: {self.metadata_path}")
+        
         # Parse existing metadata
         tree = ET.parse(self.metadata_path)
         root = tree.getroot()
@@ -506,6 +508,7 @@ class DataProxy(Subscriber):
 
             if existing_acronym is not None and existing_acronym.text == acronym:
                 # Record already exists, return acronym
+                self.statusmessage(f"Output source '{acronym}' already exists in metadata, skipping creation.")
                 return acronym
         
         # Get or create NodeID (should be consistent throughout file)
@@ -527,7 +530,7 @@ class DataProxy(Subscriber):
         # Add child elements
         ET.SubElement(device_detail, 'NodeID').text = node_id
         ET.SubElement(device_detail, 'UniqueID').text = str(uuid.uuid4())
-        ET.SubElement(device_detail, 'IsConcentrator').text = 'false'
+        ET.SubElement(device_detail, 'IsConcentrator').text = '0'
         ET.SubElement(device_detail, 'Acronym').text = acronym
         ET.SubElement(device_detail, 'Name').text = source_name
         ET.SubElement(device_detail, 'AccessID').text = '0'
@@ -541,7 +544,7 @@ class DataProxy(Subscriber):
         ET.SubElement(device_detail, 'Latitude').text = '0.0'
         ET.SubElement(device_detail, 'InterconnectionName')
         ET.SubElement(device_detail, 'ContactList')
-        ET.SubElement(device_detail, 'Enabled').text = 'true'
+        ET.SubElement(device_detail, 'Enabled').text = '1'
         
         # Format timestamp with timezone offset
         now = datetime.now(timezone.utc)
@@ -552,20 +555,36 @@ class DataProxy(Subscriber):
         timestamp = now.strftime(f'%Y-%m-%dT%H:%M:%S.%f')[:-3] + formatted_offset
         ET.SubElement(device_detail, 'UpdatedOn').text = timestamp
         
-        # Insert the new DeviceDetail after the last DeviceDetail or before first MeasurementDetail
-        insert_index = 0
+        # Insert the new DeviceDetail after schema but before SchemaVersion/MeasurementDetail
+        # Order should be: DeviceDetail, xs:schema, SchemaVersion, MeasurementDetail
+        insert_index = None
+        schema_found = False
 
         for i, child in enumerate(root):
-            if child.tag == 'DeviceDetail':
-                insert_index = i + 1
-            elif child.tag == 'MeasurementDetail' and insert_index == 0:
+            # Track if we've seen the schema
+            if child.tag.endswith('schema'):
+                schema_found = True
+            # If we've seen the schema, insert after it but before other elements
+            elif schema_found and child.tag in ('SchemaVersion', 'MeasurementDetail', 'PhasorDetail'):
                 insert_index = i
                 break
+            # If there's already a DeviceDetail after the schema, insert after the last one
+            elif schema_found and child.tag == 'DeviceDetail':
+                insert_index = i + 1
+        
+        # If no schema found or no insertion point determined, insert at beginning
+        if insert_index is None:
+            insert_index = 0
         
         root.insert(insert_index, device_detail)
         
+        # Indent the entire tree to ensure proper formatting
+        ET.indent(tree, space="  ")
+        
         # Save the updated XML
         tree.write(self.metadata_path, encoding='utf-8', xml_declaration=True)
+        
+        self.statusmessage(f"Created new output source '{acronym}' and saved to metadata file: {self.metadata_path}")
         
         return acronym
 
@@ -670,6 +689,9 @@ class DataProxy(Subscriber):
                 break
 
         root.insert(insert_index, measurement_detail)
+
+        # Indent the entire tree to ensure proper formatting
+        ET.indent(tree, space="  ")
 
         # Save the updated XML
         tree.write(self.metadata_path, encoding='utf-8', xml_declaration=True)

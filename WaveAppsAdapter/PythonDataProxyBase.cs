@@ -187,6 +187,42 @@ public class PythonDataProxyBase : FacileActionAdapterBase
     /// <inheritdoc />
     public override bool SupportsTemporalProcessing => false;
 
+    /// <inheritdoc />
+    public override string Status
+    {
+        get
+        {
+            StringBuilder status = new();
+
+            status.AppendLine(base.Status);
+
+            status.AppendLine($"         Host Adapter Port: {HostAdapterPublisherPort}");
+            status.AppendLine($"  Python Calc Adapter Port: {PythonCalcPublisherPort}");
+            status.AppendLine($"Auto-Launch Python Adapter: {AutoLaunchPythonAdapter}");
+            status.AppendLine($"     Python Launch Command: {PythonLaunchCommand}");
+
+            if (m_proxyDataPublisher is not null)
+            {
+                status.AppendLine();
+                status.AppendLine("--------------------------");
+                status.AppendLine("  Proxy Publisher Status  ");
+                status.AppendLine("--------------------------");
+                status.AppendLine(m_proxyDataPublisher.Status);
+            }
+
+            if (m_proxyDataSubscriber is not null)
+            {
+                status.AppendLine();
+                status.AppendLine("---------------------------");
+                status.AppendLine("  Proxy Subscriber Status  ");
+                status.AppendLine("---------------------------");
+                status.AppendLine(m_proxyDataSubscriber.Status);
+            }
+
+            return status.ToString();
+        }
+    }
+
     #endregion
 
     #region [ Methods ]
@@ -264,6 +300,42 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
         base.Initialize();
 
+        // Make sure a device record exists for this adapter to associate measurements with
+        using AdoDataConnection connection = new(ConfigSettings.Instance);
+        TableOperations<Device> deviceTable = new(connection);
+
+        string deviceAcronym = $"{Name}_DATA-SYNC";
+        Device? deviceRecord = deviceTable.QueryRecordWhere("Acronym = {0}", deviceAcronym);
+
+        if (deviceRecord is null)
+        {
+            TableOperations<Historian> historianTable = new(connection);
+            Historian? primaryHistorian = historianTable.QueryRecordWhere("IsPrimary <> 0");
+
+            deviceRecord = deviceTable.NewRecord();
+            Debug.Assert(deviceRecord is not null);
+
+            deviceRecord.Acronym = deviceAcronym;
+            deviceRecord.Name = $"{Name} Python Data Proxy Adapter Host Synchronization Device";
+            deviceRecord.IsConcentrator = true;
+            deviceRecord.HistorianID = primaryHistorian?.ID;
+            deviceRecord.ConnectionString = "protocol=VirtualInput";
+            deviceRecord.Description = "Python data proxy adapter host synchronization device for associated incoming measurements";
+            deviceRecord.LoadOrder = 9999;
+            deviceRecord.Enabled = true;
+
+            deviceTable.AddNewRecord(deviceRecord);
+
+            // Requery again to get complete record with assigned ID
+            deviceRecord = deviceTable.QueryRecordWhere("Acronym = {0}", deviceAcronym);
+            Debug.Assert(deviceRecord is not null);
+        }
+
+        // Get runtime ID of device record
+        TableOperations<Runtime> runtimeTable = new(connection);
+        Runtime? runtimeRecord = runtimeTable.QueryRecordWhere("SourceTable = 'Device' AND SourceID = {0}", deviceRecord.ID);
+        Debug.Assert(runtimeRecord is not null);
+
         m_proxyDataPublisher = new ProxyDataPublisher(); // Initialize with HostAdapterPublisherPort
 
         // Attach to publisher events
@@ -271,7 +343,9 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher.ProcessException += m_proxyDataPublisher_ProcessException;
         m_proxyDataPublisher.ClientConnected += m_proxyDataPublisher_ClientConnected;
 
-        m_proxyDataPublisher.Name = $"{Name}_DataProxyPublisher";
+        m_proxyDataPublisher.DataSource = DataSource;
+        m_proxyDataPublisher.Name = $"{Name}_DATA-PROXY-PUBLISHER";
+        m_proxyDataPublisher.ID = (uint)runtimeRecord.ID;
         m_proxyDataPublisher.UseBaseTimeOffsets = true;
         m_proxyDataPublisher.AllowPayloadCompression = true;
         m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
@@ -294,17 +368,20 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataSubscriber.MetadataSyncComplete += m_proxyDataSubscriber_MetadataSyncComplete;
         m_proxyDataSubscriber.ReceivedUserCommandResponse += m_proxyDataSubscriber_ReceivedUserCommandResponse;
 
-        m_proxyDataSubscriber.Name = $"{Name}_DataProxySubscriber";
+        m_proxyDataSubscriber.DataSource = DataSource;
+        m_proxyDataSubscriber.Name = $"{Name}_DATA-PROXY-SUBSCRIBER";
+        m_proxyDataSubscriber.ID = (uint)runtimeRecord.ID;
         m_proxyDataSubscriber.ConnectionString = 
             $$"""
               server=localhost:{{PythonCalcPublisherPort}}; 
               interface=0.0.0.0; 
               autoConnect=true; 
+              autoSynchronizeMetadata=true; 
               compression=true; 
               internal=true; 
               useSourcePrefixNames=false; 
               securityMode=None; 
-              outputMeasurements={FILTER ActiveMeasurements WHERE Protocol = 'STTP'}; 
+              outputMeasurements={FILTER ActiveMeasurements WHERE True}; 
               receiveInternalMetadata=true; 
               receiveExternalMetadata=true
               """;
