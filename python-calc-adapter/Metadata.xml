@@ -1,14 +1,13 @@
-<?xml version="1.0" standalone="yes"?>
-<NewDataSet>
-  <xs:schema id="NewDataSet" xmlns="" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
-    <xs:element name="NewDataSet" msdata:IsDataSet="true" msdata:UseCurrentLocale="true">
+<?xml version='1.0' encoding='utf-8'?>
+<NewDataSet xmlns:ns1="urn:schemas-microsoft-com:xml-msdata" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:schema id="NewDataSet">
+    <xs:element name="NewDataSet" ns1:IsDataSet="true" ns1:UseCurrentLocale="true">
       <xs:complexType>
         <xs:choice minOccurs="0" maxOccurs="unbounded">
           <xs:element name="DeviceDetail">
             <xs:complexType>
               <xs:sequence>
-                <xs:element name="NodeID" msdata:DataType="System.Guid, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" type="xs:string" minOccurs="0" />
-                <xs:element name="UniqueID" msdata:DataType="System.Guid, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" type="xs:string" minOccurs="0" />
+                <xs:element name="UniqueID" ns1:DataType="System.Guid" type="xs:string" minOccurs="0" />
                 <xs:element name="OriginalSource" type="xs:string" minOccurs="0" />
                 <xs:element name="IsConcentrator" type="xs:boolean" minOccurs="0" />
                 <xs:element name="Acronym" type="xs:string" minOccurs="0" />
@@ -34,7 +33,7 @@
               <xs:sequence>
                 <xs:element name="DeviceAcronym" type="xs:string" minOccurs="0" />
                 <xs:element name="ID" type="xs:string" minOccurs="0" />
-                <xs:element name="SignalID" msdata:DataType="System.Guid, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" type="xs:string" minOccurs="0" />
+                <xs:element name="SignalID" ns1:DataType="System.Guid" type="xs:string" minOccurs="0" />
                 <xs:element name="PointTag" type="xs:string" minOccurs="0" />
                 <xs:element name="SignalReference" type="xs:string" minOccurs="0" />
                 <xs:element name="SignalAcronym" type="xs:string" minOccurs="0" />
@@ -71,15 +70,11 @@
       </xs:complexType>
     </xs:element>
   </xs:schema>
-  <!--
-  Example Metadata:
-
   <DeviceDetail>
-    <NodeID>f7a5235d-cb6f-4864-a96e-a8686f36e599</NodeID>
-    <UniqueID>c9650400-d17c-41df-b974-83a6662afab6</UniqueID>
-    <IsConcentrator>false</IsConcentrator>
-    <Acronym>TEST</Acronym>
-    <Name>Test</Name>
+    <UniqueID>c3b2b93f-c6b9-4c6e-8cea-ac490d47ce07</UniqueID>
+    <IsConcentrator>0</IsConcentrator>
+    <Acronym>AVGFREQCALC</Acronym>
+    <Name>AvgFreqCalc</Name>
     <AccessID>0</AccessID>
     <ParentAcronym />
     <ProtocolName>STTP</ProtocolName>
@@ -91,22 +86,33 @@
     <Latitude>0.0</Latitude>
     <InterconnectionName />
     <ContactList />
-    <Enabled>true</Enabled>
-    <UpdatedOn>2025-01-04T03:00:52.73-05:00</UpdatedOn>
+    <Enabled>1</Enabled>
+    <UpdatedOn>2026-02-08T17:53:38.642-06:00</UpdatedOn>
   </DeviceDetail>
   <MeasurementDetail>
-    <DeviceAcronym>TEST</DeviceAcronym>
-    <ID>TEST:1</ID>
-    <SignalID>83673c68-d59d-4926-b7e9-e7678f9f66b4</SignalID>
-    <PointTag>TEST_FREQ</PointTag>
-    <SignalReference>TEST_FREQ</SignalReference>
-    <SignalAcronym>FREQ</SignalAcronym>
-    <Description>Test Frequency</Description>
+    <DeviceAcronym>AVGFREQCALC</DeviceAcronym>
+    <ID>AVGFREQCALC:1</ID>
+    <SignalID>91760b1b-a11d-46dd-96b0-e837e46480a7</SignalID>
+    <PointTag>AVG_FREQ</PointTag>
+    <SignalReference>CALC-CV</SignalReference>
+    <SignalAcronym>CALC</SignalAcronym>
+    <Description>Calculated Average Frequency</Description>
     <Internal>true</Internal>
     <Enabled>true</Enabled>
-    <UpdatedOn>2025-01-04T03:00:52.77-05:00</UpdatedOn>
+    <UpdatedOn>2026-02-08T17:53:38.648-06:00</UpdatedOn>
   </MeasurementDetail>
-  -->
+  <MeasurementDetail>
+    <DeviceAcronym>AVGFREQCALC</DeviceAcronym>
+    <ID>AVGFREQCALC:2</ID>
+    <SignalID>c39a18fd-9fd1-4f6d-8990-80ed7690b92e</SignalID>
+    <PointTag>FREQ_EXCURSION</PointTag>
+    <SignalReference>ALRM-AL</SignalReference>
+    <SignalAcronym>ALRM</SignalAcronym>
+    <Description>Frequency Excursion Event</Description>
+    <Internal>true</Internal>
+    <Enabled>true</Enabled>
+    <UpdatedOn>2026-02-08T17:53:38.649-06:00</UpdatedOn>
+  </MeasurementDetail>
   <SchemaVersion>
     <VersionNumber>9</VersionNumber>
   </SchemaVersion>

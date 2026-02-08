@@ -8,6 +8,7 @@
             "name": "Debug main.py",
             "type": "debugpy",
             "request": "launch",
+            "justMyCode": false,
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [

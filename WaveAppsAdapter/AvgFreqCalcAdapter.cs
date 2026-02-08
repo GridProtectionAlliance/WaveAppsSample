@@ -96,4 +96,13 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     // TODO: Add custom calculation configuration parameters here...
     //
     // -------------------------------------------------------------
+
+    /// <summary>
+    /// Gets or sets flag that determines if the frequency range should be validated against the expected normal operating range for the system, e.g.: 59.5 - 60.5 Hz for a 60 Hz system.
+    /// </summary>
+    [ConnectionStringParameter]
+    [DefaultValue(true)]
+    [Description("Defines flag that determines if the frequency range should be validated against the expected normal operating range for the system, e.g.: 59.5 - 60.5 Hz for a 60 Hz system")]
+    [AmbientValue("validate_frequency_range")]
+    public bool ValidateFrequencyRange { get; set; }
 }

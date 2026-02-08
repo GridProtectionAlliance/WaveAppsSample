@@ -97,8 +97,8 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
             #
             # See measurement.py for more details
 
-            # Ensure frequency is in reasonable range (59.95 to 60.05 Hz) and not NaN
-            if not np.isnan(measurement.value) and measurement.value >= 59.95 and measurement.value <= 60.05:
+            # Ensure frequency is in reasonable range (59.5 to 60.5 Hz) and not NaN
+            if not data_proxy.validate_frequency_range or (not np.isnan(measurement.value) and measurement.value >= 59.5 and measurement.value <= 60.5):
                 # The following line demonstrates how to use the value of a measurement based on its
                 # linear adjustment factor metadata , i.e., the configured adder and multiplier:
                 #frequency_sum += data_proxy.adjustedvalue(measurement)                

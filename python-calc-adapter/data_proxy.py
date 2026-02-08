@@ -24,20 +24,16 @@
 
 from __future__ import annotations
 import os
-import re
-import uuid
 import threading
-import inspect
 import numpy as np
 
-from datetime import datetime, timezone
 from gsf import static_init
 from sttp.publisher import Publisher
 from sttp.subscriber import Subscriber
 from sttp.config import Config
 from sttp.settings import Settings
 from sttp.ticks import Ticks
-from sttp.data.dataset import DataSet
+from sttp.metadata.signaltype import SignalType
 from sttp.transport.constants import ServerResponse, ServerCommand
 from sttp.transport.measurement import Measurement
 from sttp.transport.subscriberconnection import SubscriberConnection
@@ -45,7 +41,6 @@ from sttp.transport.signalindexcache import SignalIndexCache
 from typing import Any, Callable, List, Dict
 from uuid import UUID
 from time import time
-from xml.etree import ElementTree as ET
 
 @static_init
 class DataProxy(Subscriber):
@@ -78,12 +73,11 @@ class DataProxy(Subscriber):
     def __init__(self):
         super().__init__()
 
-        # Define metadata - use path relative to this script file
-        self.metadata_path = os.path.join(os.path.dirname(__file__), "Metadata.xml")
+        # Define publisher for sending data back to WaveApps host application
+        publisher = Publisher()
 
-        # Verify metadata file exists
-        if not os.path.isfile(self.metadata_path):
-            raise FileNotFoundError(f"Metadata file not found at path: {self.metadata_path}")
+        # Define persisted metadata file using path relative to this script file
+        publisher.metadata_path = os.path.join(os.path.dirname(__file__), "Metadata.xml")
 
         # -------------------------------------------------------------
         #
@@ -91,15 +85,33 @@ class DataProxy(Subscriber):
         #
         # -------------------------------------------------------------
 
-        # Define calculation output source name:
-        self.device_acronym = self.define_output_source("AvgFreqCalc")
+        # Ensure calculation output source is defined
+        self.device_acronym = publisher.define_output_source("AvgFreqCalc")
+        """
+        The device acronym for the calculation output measurements.
+        """
 
-        # Define calculation output measurements:
-        self.avg_frequency_signalid = self.define_output_measurement(self.device_acronym, "AVG_FREQ", "Calculated Average Frequency")
-        self.freq_excursion_signalid = self.define_output_measurement(self.device_acronym, "FREQ_EXCURSION", "Frequency Excursion Event", "ALRM")    
+        # Ensure calculation output measurements are defined
+        self.avg_frequency_signalid = publisher.define_output_measurement(self.device_acronym, "AVG_FREQ", "Calculated Average Frequency")
+        """
+        The signal identifier for the average frequency measurement.
+        """
+
+        self.freq_excursion_signalid = publisher.define_output_measurement(self.device_acronym, "FREQ_EXCURSION", "Frequency Excursion Event", SignalType.ALRM)
+        """
+        The signal identifier for the frequency excursion event measurement.
+        """
         
-        # Active event ID for frequency excursion events
         self.freq_excursion_eventid: UUID | None = None
+        """
+        Active event ID for frequency excursion events.
+        """
+
+        # Load persisted metadata
+        err = publisher.load_metadata()
+        
+        if err is not None:
+            raise RuntimeError(f"ERROR: {err}")
 
         # -------------------------------------------------------------
         # Define calculation configuration parameters:
@@ -138,6 +150,11 @@ class DataProxy(Subscriber):
         #
         # -------------------------------------------------------------
 
+        self.validate_frequency_range: bool = self._register_param('validate_frequency_range', True)
+        """
+        Defines flag that determines if frequency values should be validated to be within a reasonable range, e.g., 59.95 to 60.05 Hz.
+        """
+
         # self.custom_param1: float = self._register_param('custom_param1', 0.0)
         # """Example custom parameter 1."""
 
@@ -145,7 +162,14 @@ class DataProxy(Subscriber):
 
         # Configure STTP subscriber settings
         self.config = Config()
+        """
+        Configuration settings for the subscriber connection to WaveApps host application.
+        """
+        
         self.settings = Settings()
+        """
+        Subscription settings for the subscriber connection to WaveApps host application.
+        """
 
         # Internal variables
         self._groupeddata: Dict[np.uint64, Dict[np.uint64, Dict[UUID, Measurement]]] = {} 
@@ -161,26 +185,24 @@ class DataProxy(Subscriber):
         self._processmissedcount_lock = threading.Lock()
         self._processmissedcount = 0
 
-        # Set up event handlers for STTP API
+        # Set up event handlers for STTP subscriber API
         self.subscriptionupdated_receiver = self._subscription_updated
         self.newmeasurements_receiver = self._new_measurements
         self.connectionterminated_receiver = self._connection_terminated
         self.userresponse_receiver = self._user_response
 
-        self.publisher = Publisher()
+        # Set up event handlers for STTP publisher API
+        publisher.statusmessage_logger = self._publisher_status
+        publisher.errormessage_logger = self._publisher_error
+        publisher.clientconnected_receiver = self._publisher_client_connected
+        publisher.clientdisconnected_receiver = self._publisher_client_disconnected
+        publisher.usercommand_receiver = self._publisher_usercommand_receiver
 
-        self.publisher.statusmessage_logger = self._publisher_status
-        self.publisher.errormessage_logger = self._publisher_error
-        self.publisher.clientconnected_receiver = self._publisher_client_connected
-        self.publisher.clientdisconnected_receiver = self._publisher_client_disconnected
-        self.publisher.usercommand_receiver = self._publisher_usercommand_receiver
-
-        dataset, err = DataSet.from_xml(open(self.metadata_path).read())
-        
-        if err is not None:
-            raise RuntimeError(f"Failed to load metadata: {err}")
-        
-        self.publisher.define_metadata(dataset)
+        # Maintain a reference to the publisher
+        self.publisher = publisher
+        """
+        Reference to the STTP publisher API used to send data back to WaveApps host application.
+        """
         
     @property
     def downsampledcount(self) -> int:
@@ -431,7 +453,7 @@ class DataProxy(Subscriber):
             self.statusmessage(f"Received serialization of adapter properties from WaveApps host proxy publisher \"{connection_string}\"")
 
             # Parse connection string
-            settings = dict(item.split('=') for item in connection_string.split(';') if '=' in item)
+            settings = dict((k.strip(), v.strip()) for item in connection_string.split(';') if '=' in item for k, v in [item.split('=', 1)])
 
             # Update adapter properties based on received settings
             for name, value in settings.items():
@@ -473,263 +495,6 @@ class DataProxy(Subscriber):
         if command == ServerCommand.USERCOMMAND00:
             # Client is notifying us that configuration has changed, instruct subscriber to request new metadata
             self.request_metadata()
-
-    def define_output_source(self, source_name: str) -> str:
-        """
-        Defines an output source for the calculation, i.e., a virtual device in the
-        configuration used to group output measurements. This source will be persisted
-        to local XML metadata for future runs.
-
-        Parameters
-        ----------
-        source_name : str
-            Name of the output source
-        Returns
-        -------
-        str
-            Device `Acronym` of the output source
-        """
-    
-        # Generate valid acronym from source_name
-        acronym = source_name.upper().replace(" ", "")
-
-        # Remove any characters not matching the allowed pattern
-        acronym = re.sub(r'[^A-Z0-9\-!_\.@#\$]', '', acronym)
-        
-        self.statusmessage(f"Defining output source '{source_name}' with acronym '{acronym}' using metadata file: {self.metadata_path}")
-        
-        # Parse existing metadata
-        tree = ET.parse(self.metadata_path)
-        root = tree.getroot()
-        
-        # Check if device with this acronym already exists
-        for device in root.findall('.//DeviceDetail'):
-            existing_acronym = device.find('Acronym')
-
-            if existing_acronym is not None and existing_acronym.text == acronym:
-                # Record already exists, return acronym
-                self.statusmessage(f"Output source '{acronym}' already exists in metadata, skipping creation.")
-                return acronym
-        
-        # Get or create NodeID (should be consistent throughout file)
-        node_id = None
-
-        for device in root.findall('.//DeviceDetail'):
-            node_id_elem = device.find('NodeID')
-
-            if node_id_elem is not None and node_id_elem.text:
-                node_id = node_id_elem.text
-                break
-        
-        if node_id is None:
-            node_id = str(uuid.uuid4())
-        
-        # Create new DeviceDetail element
-        device_detail = ET.Element('DeviceDetail')
-        
-        # Add child elements
-        ET.SubElement(device_detail, 'NodeID').text = node_id
-        ET.SubElement(device_detail, 'UniqueID').text = str(uuid.uuid4())
-        ET.SubElement(device_detail, 'IsConcentrator').text = '0'
-        ET.SubElement(device_detail, 'Acronym').text = acronym
-        ET.SubElement(device_detail, 'Name').text = source_name
-        ET.SubElement(device_detail, 'AccessID').text = '0'
-        ET.SubElement(device_detail, 'ParentAcronym')
-        ET.SubElement(device_detail, 'ProtocolName').text = 'STTP'
-        ET.SubElement(device_detail, 'FramesPerSecond').text = '1'
-        ET.SubElement(device_detail, 'CompanyAcronym').text = 'GPA'
-        ET.SubElement(device_detail, 'VendorAcronym')
-        ET.SubElement(device_detail, 'VendorDeviceName')
-        ET.SubElement(device_detail, 'Longitude').text = '0.0'
-        ET.SubElement(device_detail, 'Latitude').text = '0.0'
-        ET.SubElement(device_detail, 'InterconnectionName')
-        ET.SubElement(device_detail, 'ContactList')
-        ET.SubElement(device_detail, 'Enabled').text = '1'
-        
-        # Format timestamp with timezone offset
-        now = datetime.now(timezone.utc)
-
-        # Get local offset
-        local_offset = datetime.now().astimezone().strftime('%z')
-        formatted_offset = f"{local_offset[:3]}:{local_offset[3:]}"
-        timestamp = now.strftime(f'%Y-%m-%dT%H:%M:%S.%f')[:-3] + formatted_offset
-        ET.SubElement(device_detail, 'UpdatedOn').text = timestamp
-        
-        # Insert the new DeviceDetail after schema but before SchemaVersion/MeasurementDetail
-        # Order should be: DeviceDetail, xs:schema, SchemaVersion, MeasurementDetail
-        insert_index = None
-        schema_found = False
-
-        for i, child in enumerate(root):
-            # Track if we've seen the schema
-            if child.tag.endswith('schema'):
-                schema_found = True
-            # If we've seen the schema, insert after it but before other elements
-            elif schema_found and child.tag in ('SchemaVersion', 'MeasurementDetail', 'PhasorDetail'):
-                insert_index = i
-                break
-            # If there's already a DeviceDetail after the schema, insert after the last one
-            elif schema_found and child.tag == 'DeviceDetail':
-                insert_index = i + 1
-        
-        # If no schema found or no insertion point determined, insert at beginning
-        if insert_index is None:
-            insert_index = 0
-        
-        root.insert(insert_index, device_detail)
-        
-        # Indent the entire tree to ensure proper formatting
-        ET.indent(tree, space="  ")
-        
-        # Save the updated XML
-        tree.write(self.metadata_path, encoding='utf-8', xml_declaration=True)
-        
-        self.statusmessage(f"Created new output source '{acronym}' and saved to metadata file: {self.metadata_path}")
-        
-        return acronym
-
-    def define_output_measurement(self, device_acronym: str, point_tag: str, description: str, signal_type: str = "CALC") -> UUID:
-        """
-        Defines an output measurement for the calculation. This measurement will
-        be persisted to local XML metadata for future runs.
-
-        Parameters
-        ----------
-        device_acronym : str
-            Device `Acronym` of the output measurement
-        point_tag : str
-            Name of the output measurement
-        description : str
-            Description of the output measurement
-        signal_type : str, optional
-            Signal type of the output measurement (default is "CALC")
-
-        Returns
-        -------
-        UUID
-            Signal ID of the output measurement
-        """
-
-        # Generate valid point tag
-        point_tag_clean = point_tag.upper().replace(" ", "")
-
-        # Remove any characters not matching the allowed pattern
-        point_tag_clean = re.sub(r'[^A-Z0-9\-!_\.@#\$]', '', point_tag_clean)
-
-        # Parse existing metadata
-        tree = ET.parse(self.metadata_path)
-        root = tree.getroot()
-
-        # Check if measurement with this point tag already exists
-        for measurement in root.findall('.//MeasurementDetail'):
-            existing_point_tag = measurement.find('PointTag')
-            
-            if existing_point_tag is not None and existing_point_tag.text == point_tag_clean:
-                # Record already exists, return signal ID
-                signal_id_elem = measurement.find('SignalID')
-                
-                if signal_id_elem is not None and signal_id_elem.text:
-                    return UUID(signal_id_elem.text)
-
-        # Find the next available index for this device
-        max_index = 0
-
-        for measurement in root.findall('.//MeasurementDetail'):
-            device_elem = measurement.find('DeviceAcronym')
-            id_elem = measurement.find('ID')
-            
-            if device_elem is not None and device_elem.text == device_acronym:
-                if id_elem is not None and id_elem.text:
-                    # Parse the index from ID field (format: DEVICE:INDEX)
-                    parts = id_elem.text.split(':')
-                    if len(parts) == 2:
-                        try:
-                            index = int(parts[1])
-                            max_index = max(max_index, index)
-                        except ValueError:
-                            pass
-
-        # Increment to get next index
-        next_index = max_index + 1
-
-        # Generate new signal ID
-        signal_id = uuid.uuid4()
-
-        # Create new MeasurementDetail element
-        measurement_detail = ET.Element('MeasurementDetail')
-
-        # Add child elements
-        ET.SubElement(measurement_detail, 'DeviceAcronym').text = device_acronym
-        ET.SubElement(measurement_detail, 'ID').text = f"{device_acronym}:{next_index}"
-        ET.SubElement(measurement_detail, 'SignalID').text = str(signal_id)
-        ET.SubElement(measurement_detail, 'PointTag').text = point_tag_clean
-        ET.SubElement(measurement_detail, 'SignalReference').text = point_tag_clean
-        ET.SubElement(measurement_detail, 'SignalAcronym').text = signal_type
-        ET.SubElement(measurement_detail, 'Description').text = description
-        ET.SubElement(measurement_detail, 'Internal').text = 'true'
-        ET.SubElement(measurement_detail, 'Enabled').text = 'true'
-
-        # Format timestamp with timezone offset
-        now = datetime.now(timezone.utc)
-
-        # Get local offset
-        local_offset = datetime.now().astimezone().strftime('%z')
-        formatted_offset = f"{local_offset[:3]}:{local_offset[3:]}"
-        timestamp = now.strftime(f'%Y-%m-%dT%H:%M:%S.%f')[:-3] + formatted_offset
-        ET.SubElement(measurement_detail, 'UpdatedOn').text = timestamp
-
-        # Insert the new MeasurementDetail after the last MeasurementDetail or before first PhasorDetail
-        insert_index = len(root)
-
-        for i, child in enumerate(root):
-            if child.tag == 'MeasurementDetail':
-                insert_index = i + 1
-            elif child.tag == 'PhasorDetail' and insert_index == len(root):
-                insert_index = i
-                break
-
-        root.insert(insert_index, measurement_detail)
-
-        # Indent the entire tree to ensure proper formatting
-        ET.indent(tree, space="  ")
-
-        # Save the updated XML
-        tree.write(self.metadata_path, encoding='utf-8', xml_declaration=True)
-
-        return signal_id
-
-    def get_signal_id(self, point_tag: str) -> UUID | None:
-        """
-        Gets the signal ID for the specified point tag.
-
-        Parameters
-        ----------
-        point_tag : str
-            Name of the point tag
-
-        Returns
-        -------
-        UUID | None
-            Signal ID if found, otherwise None
-        """
-
-        # Parse existing metadata
-        tree = ET.parse(self.metadata_path)
-        root = tree.getroot()
-
-        # Search for measurement with matching point tag
-        for measurement in root.findall('.//MeasurementDetail'):
-            existing_point_tag = measurement.find('PointTag')
-            
-            if existing_point_tag is not None and existing_point_tag.text == point_tag:
-                # Found matching point tag, return signal ID
-                signal_id_elem = measurement.find('SignalID')
-                
-                if signal_id_elem is not None and signal_id_elem.text:
-                    return UUID(signal_id_elem.text)
-        
-        # Point tag not found
-        return None
 
     def _register_param(self, name: str, default_value: Any|None=None) -> Any:
         """

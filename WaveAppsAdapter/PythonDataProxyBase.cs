@@ -32,13 +32,48 @@ namespace WaveApps;
 /// This is internal functionality used to send and receive data from the Python adapter.
 /// It is not expected that user will need to modify this code.
 /// </remarks>
-public class PythonDataProxyBase : FacileActionAdapterBase
+public abstract class PythonDataProxyBase : FacileActionAdapterBase
 {
     #region [ Members ]
     
     // Nested Types
-    private class ProxyDataPublisher : DataPublisher
+    private class ProxyDataPublisher(PythonDataProxyBase host) : DataPublisher
     {
+        private DataSet? m_filteredDataSource;
+
+        /// <inheritdoc />
+        public override DataSet? DataSource
+        {
+            get => m_filteredDataSource;
+            set
+            {
+                if (value is null)
+                {
+                    m_filteredDataSource = null;
+                    return;
+                }
+
+                // Get configured input signal ID list from host adapter configuration
+                string inputSignalIDs = host.GetInputSignalIDs();
+
+                // Extract rows matching input signal IDs from active measurements in current metadata
+                DataTable hostActiveMeasurements = value.Tables["ActiveMeasurements"]!;
+                DataRow[] filteredRows = hostActiveMeasurements.Select($"SignalID IN ({inputSignalIDs})");
+
+                // Create new filtered data source with same structure as original metadata, but only rows matching input signal IDs
+                DataSet filteredDataSource = new(value.DataSetName);
+
+                // Only adding ActiveMeasurements table to publisher metadata since that's the only key table needed
+                filteredDataSource.Tables.Add(hostActiveMeasurements.Clone());
+                DataTable filteredActiveMeasurements = filteredDataSource.Tables["ActiveMeasurements"]!;
+
+                foreach (DataRow filteredRow in filteredRows)
+                    filteredActiveMeasurements.ImportRow(filteredRow);
+
+                m_filteredDataSource = filteredDataSource;
+            }
+        }
+
         /// <summary>
         /// Broadcasts user command response to all connected clients.
         /// </summary>
@@ -61,10 +96,11 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         /// <returns><c>true</c> if send was successful; otherwise <c>false</c>.</returns>
         public bool SendUserCommandResponse(Guid clientID, ServerResponse response, ServerCommand command, byte[]? data = null)
         {
-            if (response is < ServerResponse.UserResponse00 or > ServerResponse.UserResponse15)
-                throw new ArgumentOutOfRangeException(nameof(response), "Response must be a user response between UserResponse00 and UserResponse15");
+            const string Error = $"Response must range from '{nameof(ServerResponse.UserResponse00)}' to '{nameof(ServerResponse.UserResponse15)}'";
 
-            return SendClientResponse(clientID, response, command, data);
+            return response is < ServerResponse.UserResponse00 or > ServerResponse.UserResponse15 ? 
+                throw new ArgumentOutOfRangeException(nameof(response), response, Error) : 
+                SendClientResponse(clientID, response, command, data);
         }
     }
     
@@ -81,9 +117,6 @@ public class PythonDataProxyBase : FacileActionAdapterBase
             get => base.DataSource;
             set
             {
-                if (DataSetEqualityComparer.Default.Equals(DataSource, value))
-                    return;
-
                 base.DataSource = value;
 
                 // Notify Python calculation adapter of configuration change
@@ -132,6 +165,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         }
     }
 
+    /// <inheritdoc />
     public override MeasurementKey[]? InputMeasurementKeys
     {
         get => base.InputMeasurementKeys;
@@ -207,6 +241,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                 status.AppendLine("--------------------------");
                 status.AppendLine("  Proxy Publisher Status  ");
                 status.AppendLine("--------------------------");
+                status.AppendLine();
                 status.AppendLine(m_proxyDataPublisher.Status);
             }
 
@@ -216,6 +251,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
                 status.AppendLine("---------------------------");
                 status.AppendLine("  Proxy Subscriber Status  ");
                 status.AppendLine("---------------------------");
+                status.AppendLine();
                 status.AppendLine(m_proxyDataSubscriber.Status);
             }
 
@@ -326,7 +362,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
             deviceTable.AddNewRecord(deviceRecord);
 
-            // Requery again to get complete record with assigned ID
+            // Requery again to get record with assigned ID
             deviceRecord = deviceTable.QueryRecordWhere("Acronym = {0}", deviceAcronym);
             Debug.Assert(deviceRecord is not null);
         }
@@ -336,7 +372,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         Runtime? runtimeRecord = runtimeTable.QueryRecordWhere("SourceTable = 'Device' AND SourceID = {0}", deviceRecord.ID);
         Debug.Assert(runtimeRecord is not null);
 
-        m_proxyDataPublisher = new ProxyDataPublisher(); // Initialize with HostAdapterPublisherPort
+        m_proxyDataPublisher = new ProxyDataPublisher(this); // Initialize with HostAdapterPublisherPort
 
         // Attach to publisher events
         m_proxyDataPublisher.StatusMessage += m_proxyDataPublisher_StatusMessage;
@@ -344,13 +380,12 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher.ClientConnected += m_proxyDataPublisher_ClientConnected;
 
         m_proxyDataPublisher.DataSource = DataSource;
-        m_proxyDataPublisher.Name = $"{Name}_DATA-PROXY-PUBLISHER";
+        m_proxyDataPublisher.Name = $"{Name}_PROXY-DATA-PUBLISHER";
         m_proxyDataPublisher.ID = (uint)runtimeRecord.ID;
         m_proxyDataPublisher.UseBaseTimeOffsets = true;
         m_proxyDataPublisher.AllowPayloadCompression = true;
         m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
         m_proxyDataPublisher.ConnectionString = $"commandChannel={{port={HostAdapterPublisherPort}}}";
-
         m_proxyDataPublisher.Initialize();
 
         // Start publisher
@@ -369,7 +404,7 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataSubscriber.ReceivedUserCommandResponse += m_proxyDataSubscriber_ReceivedUserCommandResponse;
 
         m_proxyDataSubscriber.DataSource = DataSource;
-        m_proxyDataSubscriber.Name = $"{Name}_DATA-PROXY-SUBSCRIBER";
+        m_proxyDataSubscriber.Name = $"{Name}_PROXY-DATA-SUBSCRIBER";
         m_proxyDataSubscriber.ID = (uint)runtimeRecord.ID;
         m_proxyDataSubscriber.ConnectionString = 
             $$"""
@@ -445,12 +480,17 @@ public class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher?.QueueMeasurementsForProcessing(measurements);
     }
 
-    private string GetFilteredMetadataTables()
+    // Get configured input measurement keys that define measurements to be published to Python adapter
+    private string GetInputSignalIDs()
     {
-        // Configured input measurement keys define measurements to be published to Python adapter
-        string inputSignalIDs = InputMeasurementKeys is { Length: > 0 } ?
+        return InputMeasurementKeys is { Length: > 0 } ?
             string.Join(',', InputMeasurementKeys.Select(key => $"'{key.SignalID:D}'")) :
             $"'{Guid.Empty}'";
+    }
+
+    private string GetFilteredMetadataTables()
+    {
+        string inputSignalIDs = GetInputSignalIDs();
 
         // Filter metadata to be published down to these inputs for simplicity and optimal minimal metadata transmission
         return $"""
@@ -506,10 +546,21 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
         OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: Client \"{connectionID}\" connected: {subscriberInfo}");
 
-        AmbientConnectionStringComposer composer = new();
+        // Serialize adapter properties with 'AmbientValueAttribute' into key-value pair string for sending to Python adapter
+        string connectionString = GetType()
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property is { CanRead: true, CanWrite: true })
+            .Select<PropertyInfo, (string, string)?>(property =>
+            {
+                if (!property.TryGetAttributes(out AmbientValueAttribute[]? attributes) || attributes!.Length == 0)
+                    return null;
 
-        // Generate a serialized connection string based on current ambient property values
-        string connectionString = composer.ComposeConnectionString(this);
+                object? ambientValue = attributes[0].Value;
+                return ambientValue is null ? null : ($"{ambientValue}", $"{property.GetValue(this)}");
+            })
+            .OfType<(string key, string value)>()
+            .ToDictionary(kvp => kvp.key, kvp => kvp.value)
+            .JoinKeyValuePairs();
 
         // Send serialized property values to Python adapter, using user response 2
         bool success = m_proxyDataPublisher?.SendUserCommandResponse(clientID, ServerResponse.UserResponse02, ServerCommand.UserCommand02, Encoding.UTF8.GetBytes(connectionString)) ?? false;
@@ -680,19 +731,23 @@ public class PythonDataProxyBase : FacileActionAdapterBase
 
     private void m_pythonProcess_Exited(object? sender, EventArgs e)
     {
-        OnStatusMessage(MessageLevel.Warning, "Python calculation adapter exited unexpectedly");
+        OnStatusMessage(MessageLevel.Warning, "[Python Calculation Adapter]: python process exited unexpectedly");
+
+        // TODO:
+        // Consider implementing auto-restart logic with configurable delay and a limit on number of restart attempts within a certain
+        // time frame to prevent infinite restart loops in case of persistent errors causing Python adapter to crash on startup
     }
 
     private void m_pythonProcess_OutputDataReceived(object sender, DataReceivedEventArgs e)
     {
         if (e.Data is not null)
-            OnStatusMessage(MessageLevel.Info, e.Data);
+            OnStatusMessage(MessageLevel.Info, $"[Python Calculation Adapter]: {e.Data}");
     }
 
     private void m_pythonProcess_ErrorDataReceived(object sender, DataReceivedEventArgs e)
     {
         if (e.Data is not null)
-            OnStatusMessage(MessageLevel.Error, e.Data);
+            OnStatusMessage(MessageLevel.Error, $"[Python Calculation Adapter]: {e.Data}");
     }
 
     #endregion
