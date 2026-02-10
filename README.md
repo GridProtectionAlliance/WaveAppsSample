@@ -3,4 +3,4 @@ Sample Python calculation adapter and host application adapter for WaveApps appl
 
 ## Samples
 * [Python Calculation Adapter](/python-calc-adapter)
-* [C# WaveApps Host Adapter](/WaveAppsHostAdapter)
+* [C# WaveApps Adapter](/WaveAppsAdapter)
