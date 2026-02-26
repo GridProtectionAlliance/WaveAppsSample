@@ -558,7 +558,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 object? ambientValue = attributes[0].Value;
                 return ambientValue is null ? null : ($"{ambientValue}", $"{property.GetValue(this)}");
             })
-            .OfType<(string key, string value)>()
+            .OfType<(string key, string value)>() // Gets non-null ambient key-value tuples
             .ToDictionary(kvp => kvp.key, kvp => kvp.value)
             .JoinKeyValuePairs();
 
@@ -626,7 +626,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             // The 'UserResponse02' used for sending serialized property values to Python adapter is on a different
             // communication channel (proxy publisher), so we could have used 'UserResponse02' here for processing
             // event publication requests from Python calculation adapter. However, we instead chose the distinct
-            // 'UserResponse03' for clarity and to reduce confusion when reviewing the code.
+            // 'UserResponse03' for clarity and to reduce confusion when reviewing the code:
             case ServerResponse.UserResponse03 when command == ServerCommand.UserCommand03:
             {
                 OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: Processing {length:N0}-byte event publication request from Python calculation adapter");
