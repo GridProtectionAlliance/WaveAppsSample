@@ -73,35 +73,6 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 m_filteredDataSource = filteredDataSource;
             }
         }
-
-        /// <summary>
-        /// Broadcasts user command response to all connected clients.
-        /// </summary>
-        /// <param name="response">Server response.</param>
-        /// <param name="command">In response to command.</param>
-        /// <param name="data">Data to return to client; null if none.</param>
-        public void BroadcastCommandResponse(ServerResponse response, ServerCommand command, byte[]? data = null)
-        {
-            foreach (Guid clientID in ClientConnections.Keys)
-                SendUserCommandResponse(clientID, response, command, data);
-        }
-        
-        /// <summary>
-        /// Sends user command response back to specified client with attached data.
-        /// </summary>
-        /// <param name="clientID">ID of client to send response.</param>
-        /// <param name="response">Server response.</param>
-        /// <param name="command">In response to command.</param>
-        /// <param name="data">Data to return to client; null if none.</param>
-        /// <returns><c>true</c> if send was successful; otherwise <c>false</c>.</returns>
-        public bool SendUserCommandResponse(Guid clientID, ServerResponse response, ServerCommand command, byte[]? data = null)
-        {
-            const string Error = $"Response must range from '{nameof(ServerResponse.UserResponse00)}' to '{nameof(ServerResponse.UserResponse15)}'";
-
-            return response is < ServerResponse.UserResponse00 or > ServerResponse.UserResponse15 ? 
-                throw new ArgumentOutOfRangeException(nameof(response), response, Error) : 
-                SendClientResponse(clientID, response, command, data);
-        }
     }
     
     private class ProxyDataSubscriber : DataSubscriber
@@ -110,7 +81,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         /// Occurs when metadata synchronization is complete.
         /// </summary>
         public event EventHandler? MetadataSyncComplete;
-        
+
         /// <inheritdoc />
         public override DataSet? DataSource
         {
@@ -137,6 +108,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     private ProxyDataPublisher? m_proxyDataPublisher;
     private ProxyDataSubscriber? m_proxyDataSubscriber;
     private Process? m_pythonProcess;
+    private bool m_awaitingHostMetadataSync;
     private bool m_disposed;
 
     #endregion
@@ -155,13 +127,21 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             base.DataSource = value;
 
             if (m_proxyDataSubscriber is not null)
-            {
                 m_proxyDataSubscriber.DataSource = value;
-                SynchronizeOutputMeasurements();
-            }
 
             if (m_proxyDataPublisher is not null)
                 m_proxyDataPublisher.DataSource = value;
+
+            if (!m_awaitingHostMetadataSync)
+                return;
+
+            m_awaitingHostMetadataSync = false;
+
+            // Synchronize output measurements with Python calculation adapter outputs after
+            // host metadata has been refreshed following notification from subscriber, this
+            // means any measurements defined by Python calculation adapter as outputs are
+            // also now available in host metadata and can be selected as outputs
+            SynchronizeOutputMeasurements();
         }
     }
 
@@ -178,6 +158,14 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
             m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
         }
+    }
+
+    /// <inheritdoc />
+    [EditorBrowsable(EditorBrowsableState.Never)] // Autoconfigured based on Python calculation adapter configuration, so hide from UI
+    public override IMeasurement[]? OutputMeasurements
+    {
+        get => base.OutputMeasurements; 
+        set => base.OutputMeasurements = value;
     }
 
     /// <summary>
@@ -522,11 +510,10 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         // will be reapplied. This can be important after a meta-data refresh which may have added new
         // measurements that could now be applicable as desired output measurements.
         OutputMeasurements = m_proxyDataSubscriber?.OutputMeasurements;
-
-        #pragma warning disable CA2245
-        OutputSourceIDs = OutputSourceIDs;
-        #pragma warning restore CA2245
+        LoadOutputSourceIDs(this);
     }
+
+    // --- Proxy Data Publisher Event Handlers ---
 
     private void m_proxyDataPublisher_StatusMessage(object? sender, EventArgs<string> e)
     {
@@ -571,6 +558,8 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             OnStatusMessage(MessageLevel.Error, $"[Data Proxy Publisher]: Failed to send serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
     }
 
+    // --- Proxy Data Subscriber Event Handlers ---
+
     private void m_proxyDataSubscriber_StatusMessage(object? sender, EventArgs<string> e)
     {
         OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: {e.Argument}", nameof(m_proxyDataSubscriber_StatusMessage));
@@ -607,6 +596,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     {
         OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Metadata synchronization from Python calculation adapter complete");
         OnConfigurationChanged();
+        m_awaitingHostMetadataSync = true;
     }
 
     private void m_proxyDataSubscriber_ReceivedUserCommandResponse(object? sender, DataSubscriber.UserCommandArgs e)
@@ -728,6 +718,8 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 break;
         }
     }
+
+    // --- Python Process Event Handlers ---
 
     private void m_pythonProcess_Exited(object? sender, EventArgs e)
     {
