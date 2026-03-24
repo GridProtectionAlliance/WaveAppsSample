@@ -150,7 +150,7 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
             Ticks.utcnow(), 
             timestamp, 
             RAISED, 
-            event_details)
+            f'{{{event_details}}}')
     else:
         if data_proxy.freq_excursion_eventid is None:
             return
