@@ -673,7 +673,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                     Timestamp = timestamp,
                     AlarmTimestamp = alarmTimestamp,
                     Value = value,
-                    AlarmID = signalID,
+                    AlarmID = eventID,
                     Metadata = alarmKey.Metadata
                 };
                 
