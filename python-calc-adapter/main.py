@@ -60,8 +60,14 @@ def main():
         data_proxy.subscribe("FILTER ActiveMeasurements WHERE True", data_proxy.settings)
         data_proxy.connect(f"{args.hostname}:{args.wave_apps_port}", data_proxy.config)
 
-        # Exit when enter key is pressed
-        input()
+        # Press 'T' and Enter to publish test event, or Enter to exit
+        while True:
+            user_input = input().strip().upper()
+            
+            if user_input == 'T':
+                data_proxy.publish_test_event()
+            elif user_input == '':
+                break
     finally:
         data_proxy.dispose()
 
