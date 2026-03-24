@@ -25,6 +25,7 @@
 from __future__ import annotations
 import os
 import threading
+import uuid
 import numpy as np
 
 from gsf import static_init
@@ -293,6 +294,46 @@ class DataProxy(Subscriber):
         # Notify all subscribers of the event (only expecting one) using user response 3
         self.publisher.broadcast_userresponse(ServerResponse.USERRESPONSE03, ServerCommand.USERCOMMAND03, connection_string.encode('utf-8'))
 
+    def publish_test_event(self):
+        """
+        Publishes a test event with example details to connected WaveApps host application clients.
+        """
+
+        alarm_timestamp = Ticks.utcnow()
+
+        # Create new event ID
+        self.freq_excursion_eventid = uuid.uuid4()
+
+        # Calculate estimated MW impact based on frequency excursion
+        avg_frequency = 60.12
+        estimated_mw_impact = 100.0
+        
+        # Update event details JSON with calculated MW impact
+        event_details = f'''{{
+            "description": "TEST: Frequency excursion detected with MW of estimated impact of {estimated_mw_impact:.2f} MW",
+            "AverageFrequency": {avg_frequency:.6f},
+            "EstimatedMW": {estimated_mw_impact:.2f}
+        }}'''
+
+        self.publish_event(
+            self.freq_excursion_signalid, 
+            self.freq_excursion_eventid, 
+            Ticks.utcnow(), 
+            alarm_timestamp, 
+            1.0,
+            f'{{{event_details}}}'
+        )
+
+        event_width = 5 * Ticks.PERSECOND
+        
+        self.publish_event(
+            self.freq_excursion_signalid, 
+            self.freq_excursion_eventid,
+            Ticks.utcnow() + event_width, 
+            alarm_timestamp + event_width, 
+            0.0
+        )
+    
     def _timeisvalid(self, timestamp: np.uint64) -> bool:
         """
         Determines if the given timestamp is within the valid time range for data grouping.
