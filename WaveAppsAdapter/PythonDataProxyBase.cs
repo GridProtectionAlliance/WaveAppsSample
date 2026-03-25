@@ -680,7 +680,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 using AdoDataConnection connection = new(ConfigSettings.Instance);
                 TableOperations<EventDetails> tableOperations = new(connection);
 
-                if (value > 0)
+                if (value > 0.0D)
                 {
                     // Start of event
                     EventDetails record = new()
