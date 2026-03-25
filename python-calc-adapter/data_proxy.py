@@ -252,6 +252,7 @@ class DataProxy(Subscriber):
         ipv6 : bool, optional
             Set to True to use IPv6, False for IPv4 (default)
         """
+        
         self.publisher.start(port, ipv6)
 
     def dispose(self):
@@ -486,7 +487,7 @@ class DataProxy(Subscriber):
         self.downsampledcount = 0
 
         # Reset process missed count on disconnect
-        self.processmissedcount  = 0
+        self.processmissedcount = 0
 
     def _user_response(self, response: ServerResponse, command: ServerCommand, data: bytes):
         if response == ServerResponse.USERRESPONSE02 and command == ServerCommand.USERCOMMAND02:
