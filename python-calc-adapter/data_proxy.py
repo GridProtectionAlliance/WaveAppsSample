@@ -86,22 +86,22 @@ class DataProxy(Subscriber):
         #
         # -------------------------------------------------------------
 
-        # Ensure calculation output source is defined
-        self.device_acronym = publisher.define_output_source("AvgFreqCalc")
-        """
-        The device acronym for the calculation output measurements.
-        """
+        # # Ensure calculation output source is defined
+        # self.device_acronym = publisher.define_output_source("AvgFreqCalc")
+        # """
+        # The device acronym for the calculation output measurements.
+        # """
 
-        # Ensure calculation output measurements are defined
-        self.avg_frequency_signalid = publisher.define_output_measurement(self.device_acronym, "AVG_FREQ", "Calculated Average Frequency")
-        """
-        The signal identifier for the average frequency measurement.
-        """
+        # # Ensure calculation output measurements are defined
+        #self.avg_frequency_signalid = publisher.define_output_measurement(self.device_acronym, "AVG_FREQ", "Calculated Average Frequency")
+        # """
+        # The signal identifier for the average frequency measurement.
+        # """
 
-        self.freq_excursion_signalid = publisher.define_output_measurement(self.device_acronym, "FREQ_EXCURSION", "Frequency Excursion Event", SignalType.ALRM)
-        """
-        The signal identifier for the frequency excursion event measurement.
-        """
+        # self.freq_excursion_signalid = publisher.define_output_measurement(self.device_acronym, "FREQ_EXCURSION", "Frequency Excursion Event", SignalType.ALRM)
+        # """
+        # The signal identifier for the frequency excursion event measurement.
+        # """
         
         self.freq_excursion_eventid: UUID | None = None
         """
@@ -145,6 +145,17 @@ class DataProxy(Subscriber):
         of received measurements every few seconds.
         """
         
+        # Ensure calculation output measurements are defined
+        self.avg_frequency_signalid : UUID = self._register_param('avg_frequency_signalid', uuid.uuid4())   
+        """
+        The signal identifier for the average frequency measurement.
+        """
+
+        self.freq_excursion_signalid : UUID = self._register_param('freq_excursion_signalid', uuid.uuid4())
+        """
+        The signal identifier for the frequency excursion event measurement.
+        """
+
         # -------------------------------------------------------------
         #
         # TODO: Add custom calculation configuration parameters here...

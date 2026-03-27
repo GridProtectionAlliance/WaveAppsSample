@@ -543,7 +543,16 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                     return null;
 
                 object? ambientValue = attributes[0].Value;
-                return ambientValue is null ? null : ($"{ambientValue}", $"{property.GetValue(this)}");
+                object? propertyValue = property.GetValue(this);
+
+                return propertyValue switch
+                {
+                    MeasurementKey key => ($"{ambientValue}", key.SignalID.ToString("D")),
+                    MeasurementKey[] keys => ($"{ambientValue}", string.Join(',', keys.Select(key => key.SignalID.ToString("D")))),
+                    IMeasurement measurement => ($"{ambientValue}", $"{measurement.Key.SignalID:D}"),
+                    IMeasurement[] measurementArray => ($"{ambientValue}", string.Join(',', measurementArray.Select(m => m.Key.SignalID.ToString("D")))),
+                    _ => ambientValue is null ? null : ($"{ambientValue}", $"{propertyValue}")
+                };
             })
             .OfType<(string key, string value)>() // Gets non-null ambient key-value tuples
             .ToDictionary(kvp => kvp.key, kvp => kvp.value)

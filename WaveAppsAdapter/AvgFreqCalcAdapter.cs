@@ -105,4 +105,34 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [Description("Defines flag that determines if the frequency range should be validated against the expected normal operating range for the system, e.g.: 59.5 - 60.5 Hz for a 60 Hz system")]
     [AmbientValue("validate_frequency_range")]
     public bool ValidateFrequencyRange { get; set; }
+
+    /// <summary>
+    /// Gets or sets the average frequency measurement key. This is used to identify the measurement that will be used for calculating the average frequency in the Python calculation.
+    /// </summary>
+    [ConnectionStringParameter(IgnoreWhenParsing = true)]
+    [Description("Defines average frequency measurment")]
+    [AmbientValue("avg_frequency_signalid")]
+    public MeasurementKey AverageFrequency { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the frequency excursion alarm measurement key. This is used to identify the measurement that will be used for triggering the frequency excursion alarm in the Python calculation.
+    /// </summary>
+    [ConnectionStringParameter(IgnoreWhenParsing = true)]
+    [Description("Defines frequency excursion alarm")]
+    [AmbientValue("freq_excursion_signalid")]
+    public MeasurementKey FrequencyExcursion { get; set; } = null!;
+
+    /// <inheritdoc />
+    public override void Initialize()
+    {
+        base.Initialize();
+
+        Dictionary<string, string> settings = Settings;
+
+        if (settings.TryGetValue(nameof(AverageFrequency), out string? setting))
+            AverageFrequency = ParseInputMeasurementKeys(DataSource, false, setting).FirstOrDefault() ?? throw new InvalidOperationException($"{nameof(AverageFrequency)} not defined");
+
+        if (settings.TryGetValue(nameof(FrequencyExcursion), out setting))
+            FrequencyExcursion = ParseInputMeasurementKeys(DataSource, false, setting).FirstOrDefault() ?? throw new InvalidOperationException($"{nameof(FrequencyExcursion)} not defined");
+    }
 }
