@@ -287,13 +287,16 @@ class DataProxy(Subscriber):
 
         self._groupeddata_receiver = callback
 
-    def publish_event(self, signalid: UUID, eventid: UUID, timestamp: np.uint64, alarm_timestamp: np.uint64, value: float | np.float64, event_details: str = ""):
+    def publish_event(self, signalid: UUID, eventid: UUID, event_type: str, timestamp: np.uint64, alarm_timestamp: np.uint64, value: float | np.float64, event_details: str = ""):
         """
         Publishes an event to connected WaveApps host application clients.
 
         Parameters:
             signalid:           The signal identifier for the event measurement
             eventid:            The unique event identifier
+            event_type:         The event details type, e.g., the calculation source name. This value
+                                is recorded as the `Type` field on the host `EventDetails` record when
+                                an event starts and is used to categorize events in the host application.
             timestamp:          The event timestamp in ticks (100-nanosecond intervals since 1/1/0001)
             alarm_timestamp:    The alarm timestamp in ticks (100-nanosecond intervals since 1/1/0001)
             value:              The event value
@@ -301,7 +304,7 @@ class DataProxy(Subscriber):
         """
 
         # Serialize parameters to a connection string format
-        connection_string = f"SignalID={signalid};EventID={eventid};Timestamp={timestamp};AlarmTimestamp={alarm_timestamp};Value={value};EventDetails={event_details}"
+        connection_string = f"SignalID={signalid};EventID={eventid};Type={event_type};Timestamp={timestamp};AlarmTimestamp={alarm_timestamp};Value={value};EventDetails={event_details}"
         
         # Notify all subscribers of the event (only expecting one) using user response 3
         self.publisher.broadcast_userresponse(ServerResponse.USERRESPONSE03, ServerCommand.USERCOMMAND03, connection_string.encode('utf-8'))
@@ -328,21 +331,23 @@ class DataProxy(Subscriber):
         }}'''
 
         self.publish_event(
-            self.freq_excursion_signalid, 
-            self.freq_excursion_eventid, 
-            Ticks.utcnow(), 
-            alarm_timestamp, 
+            self.freq_excursion_signalid,
+            self.freq_excursion_eventid,
+            "PythonProxyCalc",
+            Ticks.utcnow(),
+            alarm_timestamp,
             1.0,
             f'{{{event_details}}}'
         )
 
         event_width = 5 * Ticks.PERSECOND
-        
+
         self.publish_event(
-            self.freq_excursion_signalid, 
+            self.freq_excursion_signalid,
             self.freq_excursion_eventid,
-            Ticks.utcnow() + event_width, 
-            alarm_timestamp + event_width, 
+            "PythonProxyCalc",
+            Ticks.utcnow() + event_width,
+            alarm_timestamp + event_width,
             0.0
         )
     

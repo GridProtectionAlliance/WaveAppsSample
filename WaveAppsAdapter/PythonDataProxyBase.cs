@@ -645,6 +645,12 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                     return;
                 }
 
+                if (!settings.TryGetValue("Type", out string? eventType) || string.IsNullOrWhiteSpace(eventType))
+                {
+                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Type' parameter");
+                    return;
+                }
+
                 if (!settings.TryGetValue("Timestamp", out setting) || !Ticks.TryParse(setting, out Ticks timestamp))
                 {
                     OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Timestamp' parameter");
@@ -697,7 +703,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                         StartTime = alarmTimestamp,
                         EndTime = DateTime.MinValue,
                         EventGuid = eventID,
-                        Type = "PythonProxyCalc",
+                        Type = eventType,
                         MeasurementID = signalID,
                         Details = eventDetails
                     };

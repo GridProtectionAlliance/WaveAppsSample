@@ -145,21 +145,23 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
         }}'''
 
         data_proxy.publish_event(
-            data_proxy.freq_excursion_signalid, 
-            data_proxy.freq_excursion_eventid, 
-            Ticks.utcnow(), 
-            timestamp, 
-            RAISED, 
+            data_proxy.freq_excursion_signalid,
+            data_proxy.freq_excursion_eventid,
+            "AvgFreqCalc",
+            Ticks.utcnow(),
+            timestamp,
+            RAISED,
             f'{{{event_details}}}')
     else:
         if data_proxy.freq_excursion_eventid is None:
             return
 
         data_proxy.publish_event(
-            data_proxy.freq_excursion_signalid, 
+            data_proxy.freq_excursion_signalid,
             data_proxy.freq_excursion_eventid,
-            Ticks.utcnow(), 
-            timestamp, 
+            "AvgFreqCalc",
+            Ticks.utcnow(),
+            timestamp,
             CLEARED)
 
         # Clear active event ID when frequency has returned to normal range
