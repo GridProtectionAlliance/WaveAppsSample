@@ -574,9 +574,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         // underlying DataPublisher emits "Starting measurement route calculation...", report
         // how long ago the most recent QueueMeasurementsForProcessing call was. A high latency
         // here suggests the routing tables are batching measurements before they reach the
-        // TSSC encoder, which can explain dropped/delayed single-measurement scenarios.
-        // The cheap StartsWith check costs roughly nothing; the property check is the gate
-        // for the (small) timing path.
+        // TSSC encoder.
         if (LogRouteCalculationLatency && message.StartsWith("Starting measurement route calculation", StringComparison.Ordinal))
         {
             long lastQueue = Interlocked.Read(ref m_lastQueueTicks);
@@ -589,14 +587,14 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
                 OnStatusMessage(
                     MessageLevel.Info,
-                    $"[Data Proxy Publisher][TIMING]: Route calculation started {deltaMs:F2} ms after most recent QueueMeasurementsForProcessing ({queuedCount:N0} measurement{(queuedCount == 1 ? "" : "s")} queued).",
+                    $"[Data Proxy Publisher] [TIMING]: Route calculation started {deltaMs:F2} ms after most recent QueueMeasurementsForProcessing ({queuedCount:N0} measurement{(queuedCount == 1 ? "" : "s")} queued).",
                     nameof(m_proxyDataPublisher_StatusMessage));
             }
             else
             {
                 OnStatusMessage(
                     MessageLevel.Info,
-                    "[Data Proxy Publisher][TIMING]: Route calculation started before any measurements were queued (initial subscription/recalc).",
+                    "[Data Proxy Publisher] [TIMING]: Route calculation started before any measurements were queued (initial subscription/recalc).",
                     nameof(m_proxyDataPublisher_StatusMessage));
             }
         }
