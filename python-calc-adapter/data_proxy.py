@@ -177,7 +177,19 @@ class DataProxy(Subscriber):
         """
         Configuration settings for the subscriber connection to WaveApps host application.
         """
-        
+
+        # Explicitly request TSSC payload compression. The C# WaveApps host publisher
+        # only encodes with TSSC when BOTH its `AllowPayloadCompression` is true AND
+        # this subscriber's request includes `CompressPayloadData` in OperationalModes
+        # (i.e., compress_payloaddata=True here). Without both, the wire format falls
+        # back to the uncompressed CompactMeasurement encoding. TSSC is preferred for
+        # streaming measurements, so keep this true unless intentionally disabling.
+        # Default values from `Config()` already set these to True; we set them again
+        # explicitly so future readers see the requirement spelled out.
+        self.config.compress_payloaddata = True
+        self.config.compress_metadata = True
+        self.config.compress_signalindexcache = True
+
         self.settings = Settings()
         """
         Subscription settings for the subscriber connection to WaveApps host application.

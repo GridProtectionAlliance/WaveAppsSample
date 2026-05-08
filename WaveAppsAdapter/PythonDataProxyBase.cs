@@ -111,6 +111,16 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     private bool m_awaitingHostMetadataSync;
     private bool m_disposed;
 
+    // Diagnostics: measurement-to-publisher route latency. Only updated when
+    // LogRouteCalculationLatency is enabled; otherwise these stay at 0 and incur no cost.
+    // Tracks the most recent QueueMeasurementsForProcessing call so that, when the
+    // underlying DataPublisher emits "Starting measurement route calculation...", we
+    // can report how long the measurement sat between OnNewMeasurements and the
+    // publisher's TSSC encoder pipeline. Useful when diagnosing dropped or delayed
+    // single measurements (e.g., events/alarms) that the routing tables may batch.
+    private long m_lastQueueTicks;
+    private int m_lastQueueCount;
+
     #endregion
 
     #region [ Properties ]
@@ -205,6 +215,22 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [ConnectionStringParameter]
     [DefaultValue($"python -OO -X no_debug_ranges --disable-gil main.py localhost {{{nameof(HostAdapterPublisherPort)}}} {{{nameof(PythonCalcPublisherPort)}}}")]
     public string PythonLaunchCommand { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets flag that enables logging of route-calculation latency for diagnostic purposes.
+    /// </summary>
+    /// <remarks>
+    /// When enabled, <see cref="QueueMeasurementsForProcessing"/> stamps the time and count of each
+    /// inbound measurement batch, and the publisher's status-message handler reports the elapsed
+    /// time when the underlying <c>DataPublisher</c> emits "Starting measurement route calculation...".
+    /// Useful for diagnosing dropped or delayed single measurements (e.g., events/alarms) that may be
+    /// batched by the routing tables. Off by default - the timing/materialization cost is unwanted in
+    /// hot paths (e.g., point-on-wave measurement streaming).
+    /// </remarks>
+    [Description("Defines flag that enables logging of route-calculation latency for diagnostic purposes. Adds a small per-batch cost to QueueMeasurementsForProcessing - leave disabled in production hot paths (e.g., point-on-wave streaming).")]
+    [ConnectionStringParameter]
+    [DefaultValue(false)]
+    public bool LogRouteCalculationLatency { get; set; }
 
     /// <inheritdoc />
     public override bool SupportsTemporalProcessing => false;
@@ -371,7 +397,15 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataPublisher.Name = $"{Name}_PROXY-DATA-PUBLISHER";
         m_proxyDataPublisher.ID = (uint)runtimeRecord.ID;
         m_proxyDataPublisher.UseBaseTimeOffsets = true;
+
+        // TSSC requirement: per-subscriber the publisher only encodes with TSSC when BOTH
+        // AllowPayloadCompression == true here AND the subscriber's request includes
+        // OperationalModes.CompressPayloadData (i.e., the Python adapter's connection
+        // string sets compression=true). When either is missing, the wire format falls
+        // back to the uncompressed CompactMeasurement encoding. TSSC is preferred for
+        // streaming measurements - keep this flag true unless intentionally disabling.
         m_proxyDataPublisher.AllowPayloadCompression = true;
+
         m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
         m_proxyDataPublisher.ConnectionString = $"commandChannel={{port={HostAdapterPublisherPort}}}";
         m_proxyDataPublisher.Initialize();
@@ -464,8 +498,25 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
     public override void QueueMeasurementsForProcessing(IEnumerable<IMeasurement> measurements)
     {
-        // Take measurements received from host and send to Python calculation adapter via proxy publisher
-        m_proxyDataPublisher?.QueueMeasurementsForProcessing(measurements);
+        // Hot path - when route-latency diagnostics are off, just forward the enumerable
+        // unchanged so we incur no materialization or timing cost. This matters for
+        // high-rate streams (e.g., point-on-wave).
+        if (!LogRouteCalculationLatency)
+        {
+            m_proxyDataPublisher?.QueueMeasurementsForProcessing(measurements);
+            return;
+        }
+
+        // Diagnostic path - materialize once so we can record an accurate count without
+        // re-enumerating the source, then stamp the queue time so the route-calculation
+        // watcher (in m_proxyDataPublisher_StatusMessage) can report end-to-end latency
+        // between OnNewMeasurements and the publisher's route activity.
+        IList<IMeasurement> queued = measurements as IList<IMeasurement> ?? measurements.ToList();
+        
+        Interlocked.Exchange(ref m_lastQueueTicks, DateTime.UtcNow.Ticks);
+        Interlocked.Exchange(ref m_lastQueueCount, queued.Count);
+
+        m_proxyDataPublisher?.QueueMeasurementsForProcessing(queued);
     }
 
     // Get configured input measurement keys that define measurements to be published to Python adapter
@@ -517,7 +568,40 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
     private void m_proxyDataPublisher_StatusMessage(object? sender, EventArgs<string> e)
     {
-        OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: {e.Argument}", nameof(m_proxyDataPublisher_StatusMessage));
+        string message = e.Argument;
+
+        // Route-calculation latency watcher (gated on LogRouteCalculationLatency): when the
+        // underlying DataPublisher emits "Starting measurement route calculation...", report
+        // how long ago the most recent QueueMeasurementsForProcessing call was. A high latency
+        // here suggests the routing tables are batching measurements before they reach the
+        // TSSC encoder, which can explain dropped/delayed single-measurement scenarios.
+        // The cheap StartsWith check costs roughly nothing; the property check is the gate
+        // for the (small) timing path.
+        if (LogRouteCalculationLatency && message.StartsWith("Starting measurement route calculation", StringComparison.Ordinal))
+        {
+            long lastQueue = Interlocked.Read(ref m_lastQueueTicks);
+
+            if (lastQueue > 0)
+            {
+                long deltaTicks = DateTime.UtcNow.Ticks - lastQueue;
+                double deltaMs = deltaTicks / (double)Ticks.PerMillisecond;
+                int queuedCount = m_lastQueueCount;
+
+                OnStatusMessage(
+                    MessageLevel.Info,
+                    $"[Data Proxy Publisher][TIMING]: Route calculation started {deltaMs:F2} ms after most recent QueueMeasurementsForProcessing ({queuedCount:N0} measurement{(queuedCount == 1 ? "" : "s")} queued).",
+                    nameof(m_proxyDataPublisher_StatusMessage));
+            }
+            else
+            {
+                OnStatusMessage(
+                    MessageLevel.Info,
+                    "[Data Proxy Publisher][TIMING]: Route calculation started before any measurements were queued (initial subscription/recalc).",
+                    nameof(m_proxyDataPublisher_StatusMessage));
+            }
+        }
+
+        OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: {message}", nameof(m_proxyDataPublisher_StatusMessage));
     }
 
     private void m_proxyDataPublisher_ProcessException(object? sender, EventArgs<Exception> e)
