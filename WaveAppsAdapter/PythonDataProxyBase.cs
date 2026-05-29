@@ -38,7 +38,7 @@ namespace WaveApps;
 public abstract class PythonDataProxyBase : FacileActionAdapterBase
 {
     #region [ Members ]
-    
+
     // Nested Types
     private class ProxyDataPublisher(PythonDataProxyBase host) : DataPublisher
     {
@@ -77,7 +77,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             }
         }
     }
-    
+
     private class ProxyDataSubscriber : DataSubscriber
     {
         /// <summary>
@@ -127,7 +127,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     #endregion
 
     #region [ Properties ]
-    
+
     /// <inheritdoc />
     public override DataSet? DataSource
     {
@@ -180,7 +180,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [EditorBrowsable(EditorBrowsableState.Never)] // Autoconfigured based on Python calculation adapter configuration, so hide from UI
     public override IMeasurement[]? OutputMeasurements
     {
-        get => base.OutputMeasurements; 
+        get => base.OutputMeasurements;
         set => base.OutputMeasurements = value;
     }
 
@@ -194,7 +194,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines the unique host adapter publisher port")]
     [ConnectionStringParameter]
     [DefaultValue(65510)]
-    [Range(1,65513)]
+    [Range(1, 65513)]
     [Label("Host Adapter Publisher Port")]
     public ushort HostAdapterPublisherPort { get; set; }
 
@@ -209,9 +209,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [ConnectionStringParameter]
     [DefaultValue(65515)]
     [Range(1, 65535)]
-    [Label("Pyhton Publisher Port")]
+    [Label("Python Publisher Port")]
     public ushort PythonCalcPublisherPort { get; set; }
-    
+
     /// <summary>
     /// Gets or sets flag that determines if Python calculation adapter will be automatically launched when host adapter is initialized.
     /// </summary>
@@ -314,7 +314,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 m_pythonProcess.Exited -= m_pythonProcess_Exited;
                 m_pythonProcess.OutputDataReceived -= m_pythonProcess_OutputDataReceived;
                 m_pythonProcess.ErrorDataReceived -= m_pythonProcess_ErrorDataReceived;
-                
+
                 // TODO: Consider sending termination signal (custom command) to Python adapter
                 m_pythonProcess.Kill();
                 m_pythonProcess.Close();
@@ -442,7 +442,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataSubscriber.DataSource = DataSource;
         m_proxyDataSubscriber.Name = $"{Name}_PROXY-DATA-SUBSCRIBER";
         m_proxyDataSubscriber.ID = (uint)runtimeRecord.ID;
-        m_proxyDataSubscriber.ConnectionString = 
+        m_proxyDataSubscriber.ConnectionString =
             $$"""
               server=localhost:{{PythonCalcPublisherPort}}; 
               interface=0.0.0.0; 
@@ -456,7 +456,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
               receiveInternalMetadata=true; 
               receiveExternalMetadata=true
               """;
-        
+
         m_proxyDataSubscriber.Initialize();
 
         // Start subscriber
@@ -468,7 +468,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
         if (string.IsNullOrWhiteSpace(PythonLaunchCommand))
             throw new ArgumentException($"{nameof(PythonLaunchCommand)} is not defined, cannot launch Python calculation adapter");
-        
+
         string[] args = PythonLaunchCommand.Split(' ');
 
         if (args.Length < 2)
@@ -497,9 +497,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         m_pythonProcess.Exited += m_pythonProcess_Exited;
         m_pythonProcess.OutputDataReceived += m_pythonProcess_OutputDataReceived;
         m_pythonProcess.ErrorDataReceived += m_pythonProcess_ErrorDataReceived;
-        
+
         m_pythonProcess.Start();
-        
+
         m_pythonProcess.BeginOutputReadLine();
         m_pythonProcess.BeginErrorReadLine();
     }
@@ -526,7 +526,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         // watcher (in m_proxyDataPublisher_StatusMessage) can report end-to-end latency
         // between OnNewMeasurements and the publisher's route activity.
         IList<IMeasurement> queued = measurements as IList<IMeasurement> ?? measurements.ToList();
-        
+
         Interlocked.Exchange(ref m_lastQueueTicks, DateTime.UtcNow.Ticks);
         Interlocked.Exchange(ref m_lastQueueCount, queued.Count);
 
@@ -656,7 +656,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
         // Send serialized property values to Python adapter, using user response 2
         bool success = m_proxyDataPublisher?.SendUserCommandResponse(clientID, ServerResponse.UserResponse02, ServerCommand.UserCommand02, Encoding.UTF8.GetBytes(connectionString)) ?? false;
-        
+
         if (success)
             OnStatusMessage(MessageLevel.Info, $"[Data Proxy Publisher]: Successfully sent serialization of adapter properties to Python calculation adapter \"{connectionID}\".");
         else
