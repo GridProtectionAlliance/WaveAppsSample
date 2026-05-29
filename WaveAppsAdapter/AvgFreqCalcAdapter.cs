@@ -144,5 +144,8 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
 
         if (settings.TryGetValue(nameof(FrequencyExcursion), out setting))
             FrequencyExcursion = ParseInputMeasurementKeys(DataSource, false, setting).FirstOrDefault() ?? throw new InvalidOperationException($"{nameof(FrequencyExcursion)} not defined");
+        
+        InputMeasurementKeys = new[] { AverageFrequency };
     }
+
 }

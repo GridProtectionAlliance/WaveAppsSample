@@ -355,15 +355,14 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// <inheritdoc />
     public override void Initialize()
     {
-        new ConnectionStringParser().ParseConnectionString(ConnectionString, this);
+
+        base.Initialize();
 
         if (HostAdapterPublisherPort == 0)
             throw new ArgumentOutOfRangeException(nameof(HostAdapterPublisherPort), $"Port must be in range of 1 to {ushort.MaxValue}");
 
         if (PythonCalcPublisherPort == 0)
             throw new ArgumentOutOfRangeException(nameof(PythonCalcPublisherPort), $"Port must be in range of 1 to {ushort.MaxValue}");
-
-        base.Initialize();
 
         // Make sure a device record exists for this adapter to associate measurements with
         using AdoDataConnection connection = new(ConfigSettings.Instance);
