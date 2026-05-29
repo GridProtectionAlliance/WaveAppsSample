@@ -21,6 +21,8 @@
 //
 //******************************************************************************************************
 
+using Gemstone.ComponentModel.DataAnnotations;
+
 namespace WaveApps;
 
 /// <summary>
@@ -43,6 +45,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [ConnectionStringParameter]
     [DefaultValue(5)]
     [AmbientValue("measurement_windowsize")] // Corresponding Python parameter name (required)
+    [Label("Measurement Window Size (s)")] // Optional user-friendly label for UI display
     public int MeasurementWindowSize { get; set; }
 
     /// <summary>
@@ -52,6 +55,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [DefaultValue(3000)]
     [Description("Defines the number of samples per second for the data in the stream")]
     [AmbientValue("samplespersecond")]
+    [Label("Samples Per Second")] // Optional user-friendly label for UI display
     public int SamplesPerSecond { get; set; }
 
     /// <summary>
@@ -66,6 +70,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [DefaultValue(2.0D)]
     [Description("Defines the lag time, in seconds, for data grouping (can be sub-second)")]
     [AmbientValue("lagtime")]
+    [Label("Lag Time (s)")] // Optional user-friendly label for UI display
     public new double LagTime { get; set; }
 
     /// <summary>
@@ -80,6 +85,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [DefaultValue(2.0D)]
     [Description("Defines the lead time, in seconds, for data grouping (can be sub-second)")]
     [AmbientValue("leadtime")]
+    [Label("Lead Time (s)")] // Optional user-friendly label for UI display
     public new double LeadTime { get; set; }
 
     /// <summary>
@@ -89,6 +95,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [DefaultValue(false)]
     [Description("Defines flag that determines if the data proxy should display a summary of received measurements every few seconds")]
     [AmbientValue("display_measurementsummary")]
+    [Label("Display Measurement Summary")] // Optional user-friendly label for UI display
     public bool DisplayMeasurementSummary { get; set; }
 
     // -------------------------------------------------------------
@@ -104,6 +111,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [DefaultValue(true)]
     [Description("Defines flag that determines if the frequency range should be validated against the expected normal operating range for the system, e.g.: 59.5 - 60.5 Hz for a 60 Hz system")]
     [AmbientValue("validate_frequency_range")]
+    [Label("Validate Frequency Range")] // Optional user-friendly label for UI display
     public bool ValidateFrequencyRange { get; set; }
 
     /// <summary>
@@ -112,6 +120,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [ConnectionStringParameter(IgnoreWhenParsing = true)]
     [Description("Defines average frequency measurment")]
     [AmbientValue("avg_frequency_signalid")]
+    [Label("Average Frequency")] // Optional user-friendly label for UI display
     public MeasurementKey AverageFrequency { get; set; } = null!;
 
     /// <summary>
@@ -120,6 +129,7 @@ public class AvgFreqCalcAdapter : PythonDataProxyBase
     [ConnectionStringParameter(IgnoreWhenParsing = true)]
     [Description("Defines frequency excursion alarm")]
     [AmbientValue("freq_excursion_signalid")]
+    [Label("Frequency Excursion")] // Optional user-friendly label for UI display
     public MeasurementKey FrequencyExcursion { get; set; } = null!;
 
     /// <inheritdoc />

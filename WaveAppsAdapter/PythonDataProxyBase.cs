@@ -22,7 +22,9 @@
 //******************************************************************************************************
 // ReSharper disable SwitchStatementHandlesSomeKnownEnumValuesWithDefault
 // ReSharper disable UnusedMember.Local
+using Gemstone.ComponentModel.DataAnnotations;
 using Gemstone.IO;
+using System.ComponentModel.DataAnnotations;
 
 namespace WaveApps;
 
@@ -156,7 +158,10 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         }
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Property hidden - not used by <see cref="PythonDataProxyBase"/>.
+    /// </summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
     public override MeasurementKey[]? InputMeasurementKeys
     {
         get => base.InputMeasurementKeys;
@@ -188,6 +193,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// </remarks>
     [Description("Defines the unique host adapter publisher port")]
     [ConnectionStringParameter]
+    [DefaultValue(65510)]
+    [Range(1,65513)]
+    [Label("Host Adapter Publisher Port")]
     public ushort HostAdapterPublisherPort { get; set; }
 
     /// <summary>
@@ -199,6 +207,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// </remarks>
     [Description("Defines the unique Python calculation adapter publisher port")]
     [ConnectionStringParameter]
+    [DefaultValue(65515)]
+    [Range(1, 65535)]
+    [Label("Pyhton Publisher Port")]
     public ushort PythonCalcPublisherPort { get; set; }
     
     /// <summary>
@@ -207,6 +218,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines flag that determines if Python calculation adapter will be automatically launched when host adapter is initialized.")]
     [ConnectionStringParameter]
     [DefaultValue(false)]
+    [Label("Auto-Launch Python Adapter")]
     public bool AutoLaunchPythonAdapter { get; set; }
 
     /// <summary>
@@ -215,6 +227,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines command line that will launch Python calculation adapter. Ensure absolute file path to main Python file is defined.")]
     [ConnectionStringParameter]
     [DefaultValue($"python -OO -X no_debug_ranges --disable-gil main.py localhost {{{nameof(HostAdapterPublisherPort)}}} {{{nameof(PythonCalcPublisherPort)}}}")]
+    [Label("Python Launch Command")]
     public string PythonLaunchCommand { get; set; } = null!;
 
     /// <summary>
@@ -231,6 +244,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines flag that enables logging of route-calculation latency for diagnostic purposes. Adds a small per-batch cost to QueueMeasurementsForProcessing - leave disabled in production hot paths (e.g., point-on-wave streaming).")]
     [ConnectionStringParameter]
     [DefaultValue(false)]
+    [Label("Log Route Calculation Latency")]
     public bool LogRouteCalculationLatency { get; set; }
 
     /// <inheritdoc />
