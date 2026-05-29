@@ -725,13 +725,16 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// Parses a buffer-block event published by the Python calculation adapter and converts it to
     /// an <see cref="AlarmMeasurement"/>, also persisting the start / end of event into the host
     /// <c>EventDetails</c> table. Mirrors the JSON schema emitted by
-    /// <c>python-calc-adapter/data_proxy.py::publish_event</c>.
+    /// <c>python-calc-adapter/data_proxy.py::publish_event</c>, which is intentionally identical
+    /// to the substation-to-central schema in
+    /// <c>openHistorian/waveAppsDataTransfer/DataPublisher.cs::SendEventPublication</c> so a
+    /// single receiver implementation can decode events from either source.
     /// </summary>
     /// <remarks>
     /// The buffer-block payload is a UTF-8 JSON document with fields <c>EventID</c>, <c>Type</c>,
-    /// <c>Timestamp</c>, <c>AlarmTimestamp</c>, <c>Value</c>, and <c>EventDetails</c>. The signal
-    /// the event is associated with is implicit in the buffer block frame's SIGNAL INDEX header
-    /// and surfaces as <see cref="IMeasurement.Key"/>.<c>SignalID</c> on the measurement instance.
+    /// <c>StartTime</c>, <c>EndTime</c>, <c>Value</c>, and <c>EventDetails</c>. The signal the
+    /// event is associated with is implicit in the buffer block frame's SIGNAL INDEX header and
+    /// surfaces as <see cref="IMeasurement.Key"/>.<c>SignalID</c> on the measurement instance.
     /// </remarks>
     private AlarmMeasurement? ProcessEventBufferBlock(BufferBlockMeasurement bufferBlock)
     {
@@ -741,8 +744,8 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
         Guid eventID;
         string eventType;
-        long timestampTicks;
-        long alarmTimestampTicks;
+        long startTimeTicks;
+        long endTimeTicks;
         double value;
         string eventDetails;
 
@@ -765,15 +768,15 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 return null;
             }
 
-            if (!root.TryGetProperty("Timestamp", out JsonElement timestampElement) || !timestampElement.TryGetInt64(out timestampTicks))
+            if (!root.TryGetProperty("StartTime", out JsonElement startTimeElement) || !startTimeElement.TryGetInt64(out startTimeTicks))
             {
-                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Timestamp' field");
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'StartTime' field");
                 return null;
             }
 
-            if (!root.TryGetProperty("AlarmTimestamp", out JsonElement alarmTimestampElement) || !alarmTimestampElement.TryGetInt64(out alarmTimestampTicks))
+            if (!root.TryGetProperty("EndTime", out JsonElement endTimeElement) || !endTimeElement.TryGetInt64(out endTimeTicks))
             {
-                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'AlarmTimestamp' field");
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'EndTime' field");
                 return null;
             }
 
@@ -802,16 +805,22 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             return null;
         }
 
-        // Wrap the raw tick counts in Ticks so the implicit conversions to AlarmMeasurement
-        // timestamps and EventDetails (DateTime-typed) columns work the same as the previous
-        // connection-string path.
-        Ticks timestamp = timestampTicks;
-        Ticks alarmTimestamp = alarmTimestampTicks;
+        Ticks startTime = startTimeTicks;
+        Ticks endTime = endTimeTicks;
 
+        // AlarmMeasurement.Timestamp is the wall-clock at receipt; AlarmTimestamp is the relevant
+        // event moment (start time on event start, end time on event end). Matches the pattern in
+        // `waveAppsDataTransfer/DataSubscriber.cs::ProcessEventDetailsQueue` so the host sees the
+        // same shape regardless of which path the event came in on.
         AlarmMeasurement alarmMeasurement = new()
         {
-            Timestamp = timestamp,
-            AlarmTimestamp = alarmTimestamp,
+            Timestamp = DateTime.UtcNow,
+            AlarmTimestamp = value switch
+            {
+                0.0D when endTime > 0L => endTime,
+                > 0.0D or < 0.0D when startTime > 0L => startTime,
+                _ => DateTime.UtcNow
+            },
             Value = value,
             AlarmID = eventID,
             Metadata = alarmKey.Metadata
@@ -822,11 +831,12 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
         if (value > 0.0D)
         {
-            // Start of event
+            // Start of event - write the record using whatever start/end the publisher had.
+            // EndTime is typically 0 here (the publisher does not yet know when the event ends).
             EventDetails record = new()
             {
-                StartTime = alarmTimestamp,
-                EndTime = DateTime.MinValue,
+                StartTime = startTime,
+                EndTime = endTime > 0L ? endTime : DateTime.MinValue,
                 EventGuid = eventID,
                 Type = eventType,
                 MeasurementID = signalID,
@@ -837,7 +847,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         }
         else
         {
-            // End of event
+            // End of event - find the existing record and update its EndTime.
             EventDetails? record = tableOperations.QueryRecordWhere("EventGuid = {0}", eventID);
 
             if (record is null)
@@ -846,7 +856,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 return alarmMeasurement; // Still publish the alarm; just couldn't update the EventDetails row
             }
 
-            record.EndTime = alarmTimestamp;
+            record.EndTime = endTime;
             tableOperations.UpdateRecord(record);
         }
 

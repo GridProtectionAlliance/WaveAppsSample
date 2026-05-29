@@ -300,14 +300,17 @@ class DataProxy(Subscriber):
 
         self._groupeddata_receiver = callback
 
-    def publish_event(self, signalid: UUID, eventid: UUID, event_type: str, timestamp: np.uint64, alarm_timestamp: np.uint64, value: float | np.float64, event_details: str = ""):
+    def publish_event(self, signalid: UUID, eventid: UUID, event_type: str, start_time: np.uint64, end_time: np.uint64, value: float | np.float64, event_details: str = ""):
         """
         Publishes an event to connected WaveApps host application clients.
 
-        The event is transported as an STTP `BufferBlock` measurement addressed to ``signalid``.
-        The payload is a UTF-8 JSON document carrying ``EventID``, ``Type``, ``Timestamp``,
-        ``AlarmTimestamp``, ``Value``, and ``EventDetails``. ``SignalID`` is implicit in the
-        BufferBlock's signal-index header and is not duplicated in the payload.
+        The event is transported as an STTP ``BufferBlock`` measurement addressed to
+        ``signalid``. The payload is a UTF-8 JSON document carrying ``EventID``, ``Type``,
+        ``StartTime``, ``EndTime``, ``Value``, and ``EventDetails``. ``SignalID`` is implicit in
+        the BufferBlock's signal-index header and is not duplicated in the payload. The JSON
+        schema matches the substation-to-central transport in
+        ``openHistorian/waveAppsDataTransfer`` so a single subscriber implementation can decode
+        events from either source.
 
         ``REQUIRE CONFIRMATION`` is set on each event so the gsfapi publisher caches the block
         for retransmission if the subscriber's ack is lost - events are rare and high-value, so
@@ -316,16 +319,18 @@ class DataProxy(Subscriber):
         Parameters:
             signalid:           The signal identifier for the event measurement; the BufferBlock
                                 is addressed to this signal.
-            eventid:            The unique event identifier.
+            eventid:            The unique event identifier (constant across the start and end
+                                publications for a given event so the receiver can correlate them).
             event_type:         The event details type, e.g., the calculation source name. This
                                 value is recorded as the ``Type`` field on the host
                                 ``EventDetails`` record when an event starts and is used to
                                 categorize events in the host application.
-            timestamp:          The event timestamp in ticks (100-nanosecond intervals since
-                                1/1/0001).
-            alarm_timestamp:    The alarm timestamp in ticks (100-nanosecond intervals since
-                                1/1/0001).
-            value:              The event value (typically 1.0 = start of event, 0.0 = end).
+            start_time:         Event start time in ticks (100-nanosecond intervals since
+                                1/1/0001). Pass ``0`` if not yet known / not applicable.
+            end_time:           Event end time in ticks. Pass ``0`` on an event-start publication
+                                where the end is not yet known.
+            value:              The event value: ``1.0`` for start of event, ``0.0`` for end of
+                                event.
             event_details:      The event details in JSON format (the host stores this verbatim
                                 in the ``EventDetails.Details`` column).
         """
@@ -337,8 +342,8 @@ class DataProxy(Subscriber):
         event_payload = json.dumps({
             "EventID": str(eventid),
             "Type": event_type,
-            "Timestamp": int(timestamp),
-            "AlarmTimestamp": int(alarm_timestamp),
+            "StartTime": int(start_time),
+            "EndTime": int(end_time),
             "Value": float(value),
             "EventDetails": event_details,
         }).encode("utf-8")
@@ -350,7 +355,7 @@ class DataProxy(Subscriber):
         Publishes a test event with example details to connected WaveApps host application clients.
         """
 
-        alarm_timestamp = Ticks.utcnow()
+        start_time = Ticks.utcnow()
 
         # Create new event ID
         self.freq_excursion_eventid = uuid.uuid4()
@@ -358,7 +363,7 @@ class DataProxy(Subscriber):
         # Calculate estimated MW impact based on frequency excursion
         avg_frequency = 60.12
         estimated_mw_impact = 100.0
-        
+
         # Update event details JSON with calculated MW impact
         event_details = f'''{{
             "description": "TEST: Frequency excursion detected with MW of estimated impact of {estimated_mw_impact:.2f} MW",
@@ -366,24 +371,29 @@ class DataProxy(Subscriber):
             "EstimatedMW": {estimated_mw_impact:.2f}
         }}'''
 
+        # Start of event: end time not yet known, send 0.
         self.publish_event(
             self.freq_excursion_signalid,
             self.freq_excursion_eventid,
             "PythonProxyCalc",
-            Ticks.utcnow(),
-            alarm_timestamp,
+            start_time,
+            np.uint64(0),
             1.0,
             f'{{{event_details}}}'
         )
 
         event_width = 5 * Ticks.PERSECOND
+        end_time = start_time + event_width
 
+        # End of event: start_time is not strictly required (the host already has it cached
+        # against the EventGuid), but pass it through so the receiver can verify / re-key on
+        # late re-creates if needed.
         self.publish_event(
             self.freq_excursion_signalid,
             self.freq_excursion_eventid,
             "PythonProxyCalc",
-            Ticks.utcnow() + event_width,
-            alarm_timestamp + event_width,
+            start_time,
+            end_time,
             0.0
         )
     
