@@ -7,9 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Gemstone.Common" Version="1.0.166" />
-    <PackageReference Include="Gemstone.Timeseries" Version="1.0.166" />
-    <PackageReference Include="Gemstone.STTP" Version="1.0.631" />
+    <PackageReference Include="Gemstone.Common" Version="1.0.174" />
+    <PackageReference Include="Gemstone.Timeseries" Version="1.0.174" />
+    <PackageReference Include="Gemstone.STTP" Version="1.0.647" />
   </ItemGroup>
 
 </Project>

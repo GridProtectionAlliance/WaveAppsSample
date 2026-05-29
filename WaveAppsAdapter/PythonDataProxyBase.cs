@@ -22,6 +22,7 @@
 //******************************************************************************************************
 // ReSharper disable SwitchStatementHandlesSomeKnownEnumValuesWithDefault
 // ReSharper disable UnusedMember.Local
+using Gemstone.IO;
 
 namespace WaveApps;
 
@@ -566,9 +567,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
     // --- Proxy Data Publisher Event Handlers ---
 
-    private void m_proxyDataPublisher_StatusMessage(object? sender, EventArgs<string> e)
+    private void m_proxyDataPublisher_StatusMessage(object? sender, EventArgs<UILogMessage> e)
     {
-        string message = e.Argument;
+        string message = e.Argument.Message;
 
         // Route-calculation latency watcher (gated on LogRouteCalculationLatency): when the
         // underlying DataPublisher emits "Starting measurement route calculation...", report
@@ -651,9 +652,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
     // --- Proxy Data Subscriber Event Handlers ---
 
-    private void m_proxyDataSubscriber_StatusMessage(object? sender, EventArgs<string> e)
+    private void m_proxyDataSubscriber_StatusMessage(object? sender, EventArgs<UILogMessage> e)
     {
-        OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: {e.Argument}", nameof(m_proxyDataSubscriber_StatusMessage));
+        OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: {e.Argument.Message}", nameof(m_proxyDataSubscriber_StatusMessage));
     }
 
     private void m_proxyDataSubscriber_ProcessException(object? sender, EventArgs<Exception> e)
