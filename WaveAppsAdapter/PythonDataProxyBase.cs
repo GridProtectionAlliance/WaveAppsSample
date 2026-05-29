@@ -688,8 +688,169 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
 
     private void m_proxyDataSubscriber_NewMeasurements(object? sender, EventArgs<ICollection<IMeasurement>> e)
     {
-        // Forward measurements received from Python calculation adapter to host
-        OnNewMeasurements(e.Argument);
+        // Most measurements flow straight through to the host. BufferBlock measurements are the
+        // STTP transport for event publications from the Python calculation adapter (replacing the
+        // legacy `UserResponse03` connection-string flow): each carries a UTF-8 JSON event payload
+        // that we parse into an AlarmMeasurement + EventDetails row before forwarding.
+        List<IMeasurement>? eventAlarms = null;
+        List<IMeasurement>? regularMeasurements = null;
+
+        foreach (IMeasurement measurement in e.Argument)
+        {
+            if (measurement is BufferBlockMeasurement { Buffer: not null, Length: > 0 } bufferBlock)
+            {
+                AlarmMeasurement? alarm = ProcessEventBufferBlock(bufferBlock);
+
+                if (alarm is not null)
+                {
+                    eventAlarms ??= [];
+                    eventAlarms.Add(alarm);
+                }
+            }
+            else
+            {
+                regularMeasurements ??= [];
+                regularMeasurements.Add(measurement);
+            }
+        }
+
+        if (regularMeasurements is not null)
+            OnNewMeasurements(regularMeasurements);
+
+        if (eventAlarms is not null)
+            OnNewMeasurements(eventAlarms);
+    }
+
+    /// <summary>
+    /// Parses a buffer-block event published by the Python calculation adapter and converts it to
+    /// an <see cref="AlarmMeasurement"/>, also persisting the start / end of event into the host
+    /// <c>EventDetails</c> table. Mirrors the JSON schema emitted by
+    /// <c>python-calc-adapter/data_proxy.py::publish_event</c>.
+    /// </summary>
+    /// <remarks>
+    /// The buffer-block payload is a UTF-8 JSON document with fields <c>EventID</c>, <c>Type</c>,
+    /// <c>Timestamp</c>, <c>AlarmTimestamp</c>, <c>Value</c>, and <c>EventDetails</c>. The signal
+    /// the event is associated with is implicit in the buffer block frame's SIGNAL INDEX header
+    /// and surfaces as <see cref="IMeasurement.Key"/>.<c>SignalID</c> on the measurement instance.
+    /// </remarks>
+    private AlarmMeasurement? ProcessEventBufferBlock(BufferBlockMeasurement bufferBlock)
+    {
+        Guid signalID = bufferBlock.Key.SignalID;
+
+        OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: Processing {bufferBlock.Length:N0}-byte event buffer-block from Python calculation adapter for signal {signalID:D}");
+
+        Guid eventID;
+        string eventType;
+        long timestampTicks;
+        long alarmTimestampTicks;
+        double value;
+        string eventDetails;
+
+        try
+        {
+            // Parse the JSON payload. Use JsonDocument so we can be tolerant of missing optional
+            // fields and report exactly which property failed without throwing on the first miss.
+            using JsonDocument document = JsonDocument.Parse(new ReadOnlyMemory<byte>(bufferBlock.Buffer, 0, bufferBlock.Length));
+            JsonElement root = document.RootElement;
+
+            if (!root.TryGetProperty("EventID", out JsonElement eventIDElement) || !Guid.TryParse(eventIDElement.GetString(), out eventID))
+            {
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'EventID' field");
+                return null;
+            }
+
+            if (!root.TryGetProperty("Type", out JsonElement typeElement) || string.IsNullOrWhiteSpace(eventType = typeElement.GetString() ?? string.Empty))
+            {
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Type' field");
+                return null;
+            }
+
+            if (!root.TryGetProperty("Timestamp", out JsonElement timestampElement) || !timestampElement.TryGetInt64(out timestampTicks))
+            {
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Timestamp' field");
+                return null;
+            }
+
+            if (!root.TryGetProperty("AlarmTimestamp", out JsonElement alarmTimestampElement) || !alarmTimestampElement.TryGetInt64(out alarmTimestampTicks))
+            {
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'AlarmTimestamp' field");
+                return null;
+            }
+
+            if (!root.TryGetProperty("Value", out JsonElement valueElement) || !valueElement.TryGetDouble(out value))
+            {
+                OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Value' field");
+                return null;
+            }
+
+            // EventDetails is optional - missing or null is treated as empty.
+            eventDetails = root.TryGetProperty("EventDetails", out JsonElement eventDetailsElement) && eventDetailsElement.ValueKind == JsonValueKind.String
+                ? eventDetailsElement.GetString() ?? string.Empty
+                : string.Empty;
+        }
+        catch (JsonException ex)
+        {
+            OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to parse event buffer-block JSON payload: {ex.Message}");
+            return null;
+        }
+
+        MeasurementKey alarmKey = MeasurementKey.LookUpBySignalID(signalID);
+
+        if (alarmKey == MeasurementKey.Undefined)
+        {
+            OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to process Python event buffer-block, cannot find measurement key for signal {signalID:D}");
+            return null;
+        }
+
+        // Wrap the raw tick counts in Ticks so the implicit conversions to AlarmMeasurement
+        // timestamps and EventDetails (DateTime-typed) columns work the same as the previous
+        // connection-string path.
+        Ticks timestamp = timestampTicks;
+        Ticks alarmTimestamp = alarmTimestampTicks;
+
+        AlarmMeasurement alarmMeasurement = new()
+        {
+            Timestamp = timestamp,
+            AlarmTimestamp = alarmTimestamp,
+            Value = value,
+            AlarmID = eventID,
+            Metadata = alarmKey.Metadata
+        };
+
+        using AdoDataConnection connection = new(ConfigSettings.Instance);
+        TableOperations<EventDetails> tableOperations = new(connection);
+
+        if (value > 0.0D)
+        {
+            // Start of event
+            EventDetails record = new()
+            {
+                StartTime = alarmTimestamp,
+                EndTime = DateTime.MinValue,
+                EventGuid = eventID,
+                Type = eventType,
+                MeasurementID = signalID,
+                Details = eventDetails
+            };
+
+            tableOperations.AddNewRecord(record);
+        }
+        else
+        {
+            // End of event
+            EventDetails? record = tableOperations.QueryRecordWhere("EventGuid = {0}", eventID);
+
+            if (record is null)
+            {
+                OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to find existing event record \"{eventID}\" to update end of event");
+                return alarmMeasurement; // Still publish the alarm; just couldn't update the EventDetails row
+            }
+
+            record.EndTime = alarmTimestamp;
+            tableOperations.UpdateRecord(record);
+        }
+
+        return alarmMeasurement;
     }
 
     private void m_proxyDataSubscriber_MetaDataReceived(object? sender, EventArgs<DataSet> e)
@@ -708,122 +869,19 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     {
         ServerResponse response = e.Response;
         ServerCommand command = e.Command;
-        byte[] buffer = e.Buffer;
-        int startIndex = e.StartIndex;
         int length = e.Length;
-        
+
         switch (response)
         {
             case ServerResponse.UserResponse00 when command == ServerCommand.UserCommand00:
                 OnStatusMessage(MessageLevel.Info, "[Python Proxy Subscriber]: Received configuration changed notification from Python calculation adapter");
                 m_proxyDataSubscriber?.RefreshMetadata();
                 break;
-            // The 'UserResponse02' used for sending serialized property values to Python adapter is on a different
-            // communication channel (proxy publisher), so we could have used 'UserResponse02' here for processing
-            // event publication requests from Python calculation adapter. However, we instead chose the distinct
-            // 'UserResponse03' for clarity and to reduce confusion when reviewing the code:
-            case ServerResponse.UserResponse03 when command == ServerCommand.UserCommand03:
-            {
-                OnStatusMessage(MessageLevel.Info, $"[Python Proxy Subscriber]: Processing {length:N0}-byte event publication request from Python calculation adapter");
-
-                string connectionString = Encoding.UTF8.GetString(buffer, startIndex, length);
-                Dictionary<string, string> settings = connectionString.ParseKeyValuePairs();
-
-                if (!settings.TryGetValue("SignalID", out string? setting) || !Guid.TryParse(setting, out Guid signalID))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'SignalID' parameter");
-                    return;
-                }
-                
-                if (!settings.TryGetValue("EventID", out setting) || !Guid.TryParse(setting, out Guid eventID))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'EventID' parameter");
-                    return;
-                }
-
-                if (!settings.TryGetValue("Type", out string? eventType) || string.IsNullOrWhiteSpace(eventType))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Type' parameter");
-                    return;
-                }
-
-                if (!settings.TryGetValue("Timestamp", out setting) || !Ticks.TryParse(setting, out Ticks timestamp))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Timestamp' parameter");
-                    return;
-                }
-                
-                if (!settings.TryGetValue("AlarmTimestamp", out setting) || !Ticks.TryParse(setting, out Ticks alarmTimestamp))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'AlarmTimestamp' parameter");
-                    return;
-                }
-                
-                if (!settings.TryGetValue("Value", out setting) || !double.TryParse(setting, out double value))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'Value' parameter");
-                    return;
-                }
-                
-                if (!settings.TryGetValue("EventDetails", out string? eventDetails))
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event publication request, failed to parse 'EventDetails' parameter");
-                    return;
-                }
-
-                MeasurementKey alarmKey = MeasurementKey.LookUpBySignalID(signalID);
-
-                if (alarmKey == MeasurementKey.Undefined)
-                {
-                    OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Failed to process Python event publication request, cannot find measurement key for specified 'SignalID'");
-                    return;
-                }
-
-                AlarmMeasurement alarmMeasurement = new()
-                {
-                    Timestamp = timestamp,
-                    AlarmTimestamp = alarmTimestamp,
-                    Value = value,
-                    AlarmID = eventID,
-                    Metadata = alarmKey.Metadata
-                };
-                
-                using AdoDataConnection connection = new(ConfigSettings.Instance);
-                TableOperations<EventDetails> tableOperations = new(connection);
-
-                if (value > 0.0D)
-                {
-                    // Start of event
-                    EventDetails record = new()
-                    {
-                        StartTime = alarmTimestamp,
-                        EndTime = DateTime.MinValue,
-                        EventGuid = eventID,
-                        Type = eventType,
-                        MeasurementID = signalID,
-                        Details = eventDetails
-                    };
-
-                    tableOperations.AddNewRecord(record);
-                }
-                else
-                {
-                    // End of event
-                    EventDetails? record = tableOperations.QueryRecordWhere("EventGuid = {0}", eventID);
-
-                    if (record is null)
-                    {
-                        OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to find existing event record \"{eventID}\" to update end of event");
-                        return;
-                    }
-
-                    record.EndTime = alarmTimestamp;
-                    tableOperations.UpdateRecord(record);
-                }
-
-                OnNewMeasurements([alarmMeasurement]);
-                break;
-            }
+            // Note: event publications from the Python calculation adapter used to be transported here
+            // as `UserResponse03 / UserCommand03` carrying a connection-string-encoded record. They now
+            // flow as STTP BufferBlock measurements through `m_proxyDataSubscriber_NewMeasurements ->
+            // ProcessEventBufferBlock`. Reach for a fresh user-command pair if a future feature needs
+            // a side-channel notification.
             default:
                 OnStatusMessage(MessageLevel.Warning, $"[Python Proxy Subscriber]: Received unhandled {length:N0}-byte user server response {response} for command {command} from Python calculation adapter");
                 break;

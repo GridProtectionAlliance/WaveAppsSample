@@ -23,6 +23,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from __future__ import annotations
+import json
 import os
 import threading
 import uuid
@@ -303,23 +304,46 @@ class DataProxy(Subscriber):
         """
         Publishes an event to connected WaveApps host application clients.
 
+        The event is transported as an STTP `BufferBlock` measurement addressed to ``signalid``.
+        The payload is a UTF-8 JSON document carrying ``EventID``, ``Type``, ``Timestamp``,
+        ``AlarmTimestamp``, ``Value``, and ``EventDetails``. ``SignalID`` is implicit in the
+        BufferBlock's signal-index header and is not duplicated in the payload.
+
+        ``REQUIRE CONFIRMATION`` is set on each event so the gsfapi publisher caches the block
+        for retransmission if the subscriber's ack is lost - events are rare and high-value, so
+        the round-trip overhead is well worth the delivery guarantee.
+
         Parameters:
-            signalid:           The signal identifier for the event measurement
-            eventid:            The unique event identifier
-            event_type:         The event details type, e.g., the calculation source name. This value
-                                is recorded as the `Type` field on the host `EventDetails` record when
-                                an event starts and is used to categorize events in the host application.
-            timestamp:          The event timestamp in ticks (100-nanosecond intervals since 1/1/0001)
-            alarm_timestamp:    The alarm timestamp in ticks (100-nanosecond intervals since 1/1/0001)
-            value:              The event value
-            event_details:      The event details in JSON format
+            signalid:           The signal identifier for the event measurement; the BufferBlock
+                                is addressed to this signal.
+            eventid:            The unique event identifier.
+            event_type:         The event details type, e.g., the calculation source name. This
+                                value is recorded as the ``Type`` field on the host
+                                ``EventDetails`` record when an event starts and is used to
+                                categorize events in the host application.
+            timestamp:          The event timestamp in ticks (100-nanosecond intervals since
+                                1/1/0001).
+            alarm_timestamp:    The alarm timestamp in ticks (100-nanosecond intervals since
+                                1/1/0001).
+            value:              The event value (typically 1.0 = start of event, 0.0 = end).
+            event_details:      The event details in JSON format (the host stores this verbatim
+                                in the ``EventDetails.Details`` column).
         """
 
-        # Serialize parameters to a connection string format
-        connection_string = f"SignalID={signalid};EventID={eventid};Type={event_type};Timestamp={timestamp};AlarmTimestamp={alarm_timestamp};Value={value};EventDetails={event_details}"
-        
-        # Notify all subscribers of the event (only expecting one) using user response 3
-        self.publisher.broadcast_userresponse(ServerResponse.USERRESPONSE03, ServerCommand.USERCOMMAND03, connection_string.encode('utf-8'))
+        # Serialize the event fields as a UTF-8 JSON document and broadcast as a buffer block
+        # measurement. The receiver (`WaveAppsAdapter/PythonDataProxyBase.cs`) looks for
+        # `BufferBlockMeasurement` instances in its `NewMeasurements` handler, parses this same
+        # schema, and builds the AlarmMeasurement + EventDetails row.
+        event_payload = json.dumps({
+            "EventID": str(eventid),
+            "Type": event_type,
+            "Timestamp": int(timestamp),
+            "AlarmTimestamp": int(alarm_timestamp),
+            "Value": float(value),
+            "EventDetails": event_details,
+        }).encode("utf-8")
+
+        self.publisher.broadcast_buffer_block(signalid, event_payload, require_confirmation=True)
 
     def publish_test_event(self):
         """

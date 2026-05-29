@@ -5,6 +5,7 @@ global using System.Data;
 global using System.Diagnostics;
 global using System.Reflection;
 global using System.Text;
+global using System.Text.Json;
 global using Gemstone;
 global using Gemstone.Data;
 global using Gemstone.Data.Model;
