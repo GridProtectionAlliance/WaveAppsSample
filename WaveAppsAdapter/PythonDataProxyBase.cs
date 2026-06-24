@@ -194,7 +194,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines the unique host adapter publisher port")]
     [ConnectionStringParameter]
     [DefaultValue(65510)]
-    [Range(1, 65513)]
+    [Range(1, ushort.MaxValue)]
     [Label("Host Adapter Publisher Port")]
     public ushort HostAdapterPublisherPort { get; set; }
 
@@ -208,7 +208,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     [Description("Defines the unique Python calculation adapter publisher port")]
     [ConnectionStringParameter]
     [DefaultValue(65515)]
-    [Range(1, 65535)]
+    [Range(1, ushort.MaxValue)]
     [Label("Python Publisher Port")]
     public ushort PythonCalcPublisherPort { get; set; }
 
