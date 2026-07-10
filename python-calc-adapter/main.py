@@ -29,6 +29,16 @@ from typing import Final
 
 MAXPORT: Final = Limits.MAXUINT16
 
+def configure_Analytic(dataProxy:DataProxy):
+    """
+    Configures the analytic parameters for the frequency analysis.
+    """
+    dataProxy.avg_frequency_signalid : UUID = dataProxy._register_param('avg_frequency_signalid', uuid.uuid4())
+    dataProxy.freq_excursion_signalid : UUID = dataProxy._register_param('freq_excursion_signalid', uuid.uuid4())
+    dataProxy.validate_frequency_range: bool = dataProxy._register_param('validate_frequency_range', True)
+
+    dataProxy.geoLocation = []
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -46,8 +56,11 @@ def main():
         print(f"Data publisher port number \"{args.data_pub_port}\" is out of range: must be 1 to {MAXPORT}")
         exit(2)
 
-    data_proxy = DataProxy()
-    
+    data_proxy = DataProxy(configure_Analytic)
+
+    data_proxy.publisher.metadata_path = os.path.join(os.path.dirname(__file__), "Metadata.xml")
+    data_proxy.publisher.load_metadata()
+
     # Set user defined callback function to handle time-aligned grouped data:
     data_proxy.set_groupeddata_receiver(process_data)
 

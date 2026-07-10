@@ -22,9 +22,11 @@
 //******************************************************************************************************
 // ReSharper disable SwitchStatementHandlesSomeKnownEnumValuesWithDefault
 // ReSharper disable UnusedMember.Local
+using Gemstone.Collections.CollectionExtensions;
 using Gemstone.ComponentModel.DataAnnotations;
 using Gemstone.IO;
 using System.ComponentModel.DataAnnotations;
+using System.Runtime.CompilerServices;
 
 namespace WaveApps;
 
@@ -173,6 +175,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
                 return;
 
             m_proxyDataPublisher.MetadataTables = GetFilteredMetadataTables();
+
+            // This is needed to update the Filtered measurements properly
+            m_proxyDataPublisher.DataSource = DataSource;
         }
     }
 
@@ -193,10 +198,24 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// </remarks>
     [Description("Defines the unique host adapter publisher port")]
     [ConnectionStringParameter]
-    [DefaultValue(65510)]
+    [DefaultValue((ushort)65510)]
+    [Label("Host Adapter Publisher Port")]
     [Range(1, ushort.MaxValue)]
     [Label("Host Adapter Publisher Port")]
     public ushort HostAdapterPublisherPort { get; set; }
+
+    /// <summary>
+    /// Gets or sets the unique WaveApps host adapter publisher port.
+    /// </summary>
+    /// <remarks>
+    /// Locally, this is the port the proxy publisher will use to listen for
+    /// connections from the Python calculation adapter data subscriber.
+    /// </remarks>
+    [Description("Defines the server on which the Python Adapter is running")]
+    [ConnectionStringParameter]
+    [DefaultValue("host.docker.internal")]
+    [Label("Python Adapter remote Server")]
+    public string PythonCalcServer { get; set; }
 
     /// <summary>
     /// Gets or sets the unique Python calculation adapter publisher port.
@@ -207,9 +226,9 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// </remarks>
     [Description("Defines the unique Python calculation adapter publisher port")]
     [ConnectionStringParameter]
-    [DefaultValue(65515)]
-    [Range(1, ushort.MaxValue)]
+    [DefaultValue((ushort)65515)]
     [Label("Python Publisher Port")]
+    [Range(1, ushort.MaxValue)]
     public ushort PythonCalcPublisherPort { get; set; }
 
     /// <summary>
@@ -444,7 +463,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         m_proxyDataSubscriber.ID = (uint)runtimeRecord.ID;
         m_proxyDataSubscriber.ConnectionString =
             $$"""
-              server=localhost:{{PythonCalcPublisherPort}}; 
+              server={{PythonCalcServer}}:{{PythonCalcPublisherPort}}; 
               interface=0.0.0.0; 
               autoConnect=true; 
               autoSynchronizeMetadata=true; 
@@ -699,12 +718,12 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         {
             if (measurement is BufferBlockMeasurement { Buffer: not null, Length: > 0 } bufferBlock)
             {
-                AlarmMeasurement? alarm = ProcessEventBufferBlock(bufferBlock);
+                AlarmMeasurement[] alarms = ProcessEventBufferBlock(bufferBlock);
 
-                if (alarm is not null)
+                if (alarms is not null)
                 {
                     eventAlarms ??= [];
-                    eventAlarms.Add(alarm);
+                    eventAlarms.AddRange(alarms);
                 }
             }
             else
@@ -736,7 +755,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
     /// event is associated with is implicit in the buffer block frame's SIGNAL INDEX header and
     /// surfaces as <see cref="IMeasurement.Key"/>.<c>SignalID</c> on the measurement instance.
     /// </remarks>
-    private AlarmMeasurement? ProcessEventBufferBlock(BufferBlockMeasurement bufferBlock)
+    private AlarmMeasurement[] ProcessEventBufferBlock(BufferBlockMeasurement bufferBlock)
     {
         Guid signalID = bufferBlock.Key.SignalID;
 
@@ -759,31 +778,31 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
             if (!root.TryGetProperty("EventID", out JsonElement eventIDElement) || !Guid.TryParse(eventIDElement.GetString(), out eventID))
             {
                 OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'EventID' field");
-                return null;
+                return [];
             }
 
             if (!root.TryGetProperty("Type", out JsonElement typeElement) || string.IsNullOrWhiteSpace(eventType = typeElement.GetString() ?? string.Empty))
             {
                 OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Type' field");
-                return null;
+                return [];
             }
 
             if (!root.TryGetProperty("StartTime", out JsonElement startTimeElement) || !startTimeElement.TryGetInt64(out startTimeTicks))
             {
                 OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'StartTime' field");
-                return null;
+                return [];
             }
 
             if (!root.TryGetProperty("EndTime", out JsonElement endTimeElement) || !endTimeElement.TryGetInt64(out endTimeTicks))
             {
                 OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'EndTime' field");
-                return null;
+                return [];
             }
 
             if (!root.TryGetProperty("Value", out JsonElement valueElement) || !valueElement.TryGetDouble(out value))
             {
                 OnStatusMessage(MessageLevel.Error, "[Python Proxy Subscriber]: Cannot process Python event buffer-block, failed to parse 'Value' field");
-                return null;
+                return [];
             }
 
             // EventDetails is optional - missing or null is treated as empty.
@@ -794,7 +813,7 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         catch (JsonException ex)
         {
             OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to parse event buffer-block JSON payload: {ex.Message}");
-            return null;
+            return [];
         }
 
         MeasurementKey alarmKey = MeasurementKey.LookUpBySignalID(signalID);
@@ -802,38 +821,52 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         if (alarmKey == MeasurementKey.Undefined)
         {
             OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to process Python event buffer-block, cannot find measurement key for signal {signalID:D}");
-            return null;
+            return [];
         }
 
         Ticks startTime = startTimeTicks;
         Ticks endTime = endTimeTicks;
 
+        List<AlarmMeasurement> alarmMeasurements = [];
+
         // AlarmMeasurement.Timestamp is the wall-clock at receipt; AlarmTimestamp is the relevant
         // event moment (start time on event start, end time on event end). Matches the pattern in
         // `waveAppsDataTransfer/DataSubscriber.cs::ProcessEventDetailsQueue` so the host sees the
         // same shape regardless of which path the event came in on.
-        AlarmMeasurement alarmMeasurement = new()
+        if (startTime > 0L)
         {
-            Timestamp = DateTime.UtcNow,
-            AlarmTimestamp = value switch
+            alarmMeasurements.Add(new()
             {
-                0.0D when endTime > 0L => endTime,
-                > 0.0D or < 0.0D when startTime > 0L => startTime,
-                _ => DateTime.UtcNow
-            },
-            Value = value,
-            AlarmID = eventID,
-            Metadata = alarmKey.Metadata
-        };
+                Timestamp = DateTime.UtcNow,
+                AlarmTimestamp = startTime,
+                Value = 1,
+                AlarmID = eventID,
+                Metadata = alarmKey.Metadata
+            });
+        }
+        if (endTime > 0L)
+        {
+            alarmMeasurements.Add(new()
+            {
+                Timestamp = DateTime.UtcNow.AddTicks(1L),
+                AlarmTimestamp = endTime,
+                Value = 0,
+                AlarmID = eventID,
+                Metadata = alarmKey.Metadata
+            });
+        }
 
         using AdoDataConnection connection = new(ConfigSettings.Instance);
         TableOperations<EventDetails> tableOperations = new(connection);
 
-        if (value > 0.0D)
+        EventDetails? record = tableOperations.QueryRecordWhere("EventGuid = {0}", eventID);
+
+
+        if (record is null)
         {
             // Start of event - write the record using whatever start/end the publisher had.
             // EndTime is typically 0 here (the publisher does not yet know when the event ends).
-            EventDetails record = new()
+            record = new()
             {
                 StartTime = startTime,
                 EndTime = endTime > 0L ? endTime : DateTime.MinValue,
@@ -847,20 +880,12 @@ public abstract class PythonDataProxyBase : FacileActionAdapterBase
         }
         else
         {
-            // End of event - find the existing record and update its EndTime.
-            EventDetails? record = tableOperations.QueryRecordWhere("EventGuid = {0}", eventID);
-
-            if (record is null)
-            {
-                OnStatusMessage(MessageLevel.Error, $"[Python Proxy Subscriber]: Failed to find existing event record \"{eventID}\" to update end of event");
-                return alarmMeasurement; // Still publish the alarm; just couldn't update the EventDetails row
-            }
-
+            
             record.EndTime = endTime;
             tableOperations.UpdateRecord(record);
         }
 
-        return alarmMeasurement;
+        return alarmMeasurements.ToArray();
     }
 
     private void m_proxyDataSubscriber_MetaDataReceived(object? sender, EventArgs<DataSet> e)

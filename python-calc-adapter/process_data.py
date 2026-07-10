@@ -31,11 +31,8 @@ from typing import Dict, Final
 from uuid import UUID
 
 # Alarm event value constants
-RAISED: Final = 1.0
-""" Indicates alarm for event is raised. """
-
-CLEARED: Final = 0.0
-""" Indicates alarm for event is cleared. """
+EventKey: Final = 'AvgFreqCalc'
+""" The Key for this Analytic. """
 
 # Other constants used in example
 POWER_ESTIMATE_RATIO: Final = 19530.0  # MW per Hz deviation
@@ -147,10 +144,9 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
         data_proxy.publish_event(
             data_proxy.freq_excursion_signalid,
             data_proxy.freq_excursion_eventid,
-            "AvgFreqCalc",
-            Ticks.utcnow(),
+            EventKey,
             timestamp,
-            RAISED,
+            0,
             f'{{{event_details}}}')
     else:
         if data_proxy.freq_excursion_eventid is None:
@@ -159,10 +155,10 @@ def process_data(data_proxy: DataProxy, timestamp: np.uint64, databuffer: Dict[n
         data_proxy.publish_event(
             data_proxy.freq_excursion_signalid,
             data_proxy.freq_excursion_eventid,
-            "AvgFreqCalc",
-            Ticks.utcnow(),
+            EventKey,
+            0,
             timestamp,
-            CLEARED)
+            "")
 
         # Clear active event ID when frequency has returned to normal range
         data_proxy.freq_excursion_eventid = None

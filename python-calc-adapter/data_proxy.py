@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 import json
+import math
 import os
 import threading
 import uuid
@@ -43,6 +44,7 @@ from sttp.transport.signalindexcache import SignalIndexCache
 from typing import Any, Callable, List, Dict
 from uuid import UUID
 from time import time
+from data_proxy_publisher import DataProxy_Publisher, DeviceDef, MeasurementDef
 
 @static_init
 class DataProxy(Subscriber):
@@ -72,20 +74,11 @@ class DataProxy(Subscriber):
 
     _connection_string_params = {}
 
-    def __init__(self):
+    def __init__(self, config: Callable[['DataProxy'], None] = None):
         super().__init__()
 
         # Define publisher for sending data back to WaveApps host application
-        publisher = Publisher()
-
-        # Define persisted metadata file using path relative to this script file
-        publisher.metadata_path = os.path.join(os.path.dirname(__file__), "Metadata.xml")
-
-        # -------------------------------------------------------------
-        #
-        # TODO: Customize calculation output details here...
-        #
-        # -------------------------------------------------------------
+        publisher = DataProxy_Publisher()
 
         # # Ensure calculation output source is defined
         # self.device_acronym = publisher.define_output_source("AvgFreqCalc")
@@ -103,22 +96,11 @@ class DataProxy(Subscriber):
         # """
         # The signal identifier for the frequency excursion event measurement.
         # """
-        
-        self.freq_excursion_eventid: UUID | None = None
-        """
-        Active event ID for frequency excursion events.
-        """
-
-        # Load persisted metadata
-        err = publisher.load_metadata()
-        
-        if err is not None:
-            raise RuntimeError(f"ERROR: {err}")
-
+ 
         # -------------------------------------------------------------
         # Define calculation configuration parameters:
 
-        self.measurement_windowsize: int = self._register_param('measurement_windowsize', 5)
+        self.measurement_windowsize: float = self._register_param('measurement_windowsize', 5.0)
         """
         Defines measurement window size, in whole seconds, for data grouping.
         """
@@ -135,41 +117,19 @@ class DataProxy(Subscriber):
         this future time limit, relative to local clock, will be discarded.
         """
 
-        self.samplespersecond: int = self._register_param('samplespersecond', 3000)
-        """
-        Defines the number of samples per second for the data in the stream.
-        """
-
         self.display_measurementsummary: bool = self._register_param('display_measurementsummary', False)
         """
         Defines flag that determines if the data proxy should display a summary
         of received measurements every few seconds.
         """
         
-        # Ensure calculation output measurements are defined
-        self.avg_frequency_signalid : UUID = self._register_param('avg_frequency_signalid', uuid.uuid4())   
+        self.samplespersecond: float = self._register_param('samplespersecond', 3000)
         """
-        The signal identifier for the average frequency measurement.
-        """
-
-        self.freq_excursion_signalid : UUID = self._register_param('freq_excursion_signalid', uuid.uuid4())
-        """
-        The signal identifier for the frequency excursion event measurement.
+        Defines the number of samples per second for the data in the stream.
         """
 
-        # -------------------------------------------------------------
-        #
-        # TODO: Add custom calculation configuration parameters here...
-        #
-        # -------------------------------------------------------------
-
-        self.validate_frequency_range: bool = self._register_param('validate_frequency_range', True)
-        """
-        Defines flag that determines if frequency values should be validated to be within a reasonable range, e.g., 59.95 to 60.05 Hz.
-        """
-
-        # self.custom_param1: float = self._register_param('custom_param1', 0.0)
-        # """Example custom parameter 1."""
+        if config is not None:
+            config(self) 
 
         # -------------------------------------------------------------
 
@@ -198,7 +158,7 @@ class DataProxy(Subscriber):
 
         # Internal variables
         self._groupeddata: Dict[np.uint64, Dict[np.uint64, Dict[UUID, Measurement]]] = {} 
-        self._groupeddata_receiver: Callable[[DataProxy, np.uint64, Dict[np.uint64, Dict[UUID, Measurement]]]] | None = None
+        self._groupeddata_receiver: Callable[[DataProxy, np.uint64, Dict[np.uint64, Dict[UUID, Measurement]]], None] | None = None
 
         self._lastmessage = 0.0
 
@@ -209,6 +169,14 @@ class DataProxy(Subscriber):
         
         self._processmissedcount_lock = threading.Lock()
         self._processmissedcount = 0
+
+        self._first_window_received = 0
+        self._lastWindowProcessed = 0
+
+        """
+        Counter to track the number of data batches processed.
+        """
+        self._batch_counter = 0
 
         # Set up event handlers for STTP subscriber API
         self.subscriptionupdated_receiver = self._subscription_updated
@@ -225,6 +193,11 @@ class DataProxy(Subscriber):
 
         # Maintain a reference to the publisher
         self.publisher = publisher
+
+
+        #Update Metadata cache to includ Phasor for point on wave
+        self.metadatanotification_receiver = self._update_pow_phasor
+
         """
         Reference to the STTP publisher API used to send data back to WaveApps host application.
         """
@@ -300,7 +273,7 @@ class DataProxy(Subscriber):
 
         self._groupeddata_receiver = callback
 
-    def publish_event(self, signalid: UUID, eventid: UUID, event_type: str, start_time: np.uint64, end_time: np.uint64, value: float | np.float64, event_details: str = ""):
+    def publish_event(self, signalid: UUID, eventid: UUID, event_type: str, start_time: np.uint64, end_time: np.uint64, event_details: str = ""):
         """
         Publishes an event to connected WaveApps host application clients.
 
@@ -329,8 +302,6 @@ class DataProxy(Subscriber):
                                 1/1/0001). Pass ``0`` if not yet known / not applicable.
             end_time:           Event end time in ticks. Pass ``0`` on an event-start publication
                                 where the end is not yet known.
-            value:              The event value: ``1.0`` for start of event, ``0.0`` for end of
-                                event.
             event_details:      The event details in JSON format (the host stores this verbatim
                                 in the ``EventDetails.Details`` column).
         """
@@ -344,59 +315,24 @@ class DataProxy(Subscriber):
             "Type": event_type,
             "StartTime": int(start_time),
             "EndTime": int(end_time),
-            "Value": float(value),
+            "Value": 0,
             "EventDetails": event_details,
         }).encode("utf-8")
 
         self.publisher.broadcast_buffer_block(signalid, event_payload, require_confirmation=True)
 
-    def publish_test_event(self):
+    def add_ouputMeasurement(self, signalid: UUID, name: str, description: str, signaltype: SignalType):
         """
-        Publishes a test event with example details to connected WaveApps host application clients.
+        Adds an output measurement to the publisher metadata.
+
+        Parameters:
+            signalid:           The signal identifier for the output measurement.
+            name:               The name of the output measurement.
+            description:        The description of the output measurement.
+            signaltype:         The signal type of the output measurement.
         """
-
-        start_time = Ticks.utcnow()
-
-        # Create new event ID
-        self.freq_excursion_eventid = uuid.uuid4()
-
-        # Calculate estimated MW impact based on frequency excursion
-        avg_frequency = 60.12
-        estimated_mw_impact = 100.0
-
-        # Update event details JSON with calculated MW impact
-        event_details = f'''{{
-            "description": "TEST: Frequency excursion detected with MW of estimated impact of {estimated_mw_impact:.2f} MW",
-            "AverageFrequency": {avg_frequency:.6f},
-            "EstimatedMW": {estimated_mw_impact:.2f}
-        }}'''
-
-        # Start of event: end time not yet known, send 0.
-        self.publish_event(
-            self.freq_excursion_signalid,
-            self.freq_excursion_eventid,
-            "PythonProxyCalc",
-            start_time,
-            np.uint64(0),
-            1.0,
-            f'{{{event_details}}}'
-        )
-
-        event_width = 5 * Ticks.PERSECOND
-        end_time = start_time + event_width
-
-        # End of event: start_time is not strictly required (the host already has it cached
-        # against the EventGuid), but pass it through so the receiver can verify / re-key on
-        # late re-creates if needed.
-        self.publish_event(
-            self.freq_excursion_signalid,
-            self.freq_excursion_eventid,
-            "PythonProxyCalc",
-            start_time,
-            end_time,
-            0.0
-        )
-    
+        self.publisher.measurements.append(MeasurementDef(name, description, signaltype, None, signalid))
+        
     def _timeisvalid(self, timestamp: np.uint64) -> bool:
         """
         Determines if the given timestamp is within the valid time range for data grouping.
@@ -438,46 +374,63 @@ class DataProxy(Subscriber):
 
         return destination_ticks
 
+    def _round_to_windowStart(self, timestamp: np.uint64, window_size: np.uint64) -> np.uint64:
+        if (self._first_window_received == 0):
+            self._first_window_received = timestamp
+
+        n = math.floor((timestamp - self._first_window_received) / window_size)
+
+        return self._first_window_received + n * window_size
+
+    
     def _subscription_updated(self, signalindexcache: SignalIndexCache):
         self.statusmessage(f"Received signal index cache with {signalindexcache.count:,} mappings")
 
     def _new_measurements(self, measurements: List[Measurement]):
+
+        windowsize = np.uint64(self.measurement_windowsize * Ticks.PERSECOND)
         # Collect data into a map grouped by timestamps to the nearest second
         for measurement in measurements:
             # Get timestamp rounded to the nearest second
-            timestamp_second = self._round_to_nearestsecond(measurement.timestamp)
+            timestamp_window = self._round_to_windowStart(measurement.timestamp, windowsize)
 
-            if self._timeisvalid(timestamp_second):
+            if self._timeisvalid(measurement.timestamp):
                 # Create a new one-second timestamp map if it doesn't exist
-                if timestamp_second not in self._groupeddata:
-                    self._groupeddata[timestamp_second] = {}
+                if timestamp_window not in self._groupeddata:
+                    self._groupeddata[timestamp_window] = {}
 
                 # Get timestamp rounded to the nearest subsecond distribution, e.g., 000, 033, 066, 100 ms
                 timestamp_subsecond = self._round_to_subseconddistribution(measurement.timestamp)
 
                 # Create a new subsecond timestamp map if it doesn't exist                
-                if timestamp_subsecond not in self._groupeddata[timestamp_second]:
-                    self._groupeddata[timestamp_second][timestamp_subsecond] = {}
+                if timestamp_subsecond not in self._groupeddata[timestamp_window]:
+                    self._groupeddata[timestamp_window][timestamp_subsecond] = {}
 
                 # Append measurement to subsecond timestamp list, tracking downsampled measurements
-                if measurement.signalid in self._groupeddata[timestamp_second][timestamp_subsecond]:
+                if measurement.signalid in self._groupeddata[timestamp_window][timestamp_subsecond]:
                     with self._downsampledcount_lock:
                         self._downsampledcount += 1
 
-                self._groupeddata[timestamp_second][timestamp_subsecond][measurement.signalid] = measurement
+                self._groupeddata[timestamp_window][timestamp_subsecond][measurement.signalid] = measurement
 
         # Check if it's time to publish grouped data, waiting for measurement_windowsize to elapse. Note
         # that this implementation depends on continuous data reception to trigger data publication.
         # A more robust implementation would use a precision timer to trigger data publication.
         currenttime = Ticks.utcnow()
-        windowsize = np.uint64(self.measurement_windowsize * Ticks.PERSECOND)
+        lagtime = self.lagtime * Ticks.PERSECOND
 
-        for timestamp in list(self._groupeddata.keys()):
-            if currenttime - timestamp >= windowsize:
+        windows = list(self._groupeddata.keys())
+        windows.sort()
+        for timestamp in windows:
+            if (currenttime - timestamp) >= (windowsize+ lagtime):
                 groupeddata = self._groupeddata.pop(timestamp)
 
-                # Call user defined data function handler with one-second grouped data buffer on a separate thread
-                threading.Thread(target=self._publish_data, args=(timestamp, groupeddata), name="PublishDataThread").start()
+                if (timestamp > self._lastWindowProcessed):
+                    # Call user defined data function handler with one-second grouped data buffer on a separate thread
+                    threading.Thread(target=self._publish_data, args=(timestamp, groupeddata), name="PublishDataThread").start()
+                    self._lastWindowProcessed = timestamp
+                else:
+                    self.statusmessage(f"WARNING: Data publication skipped for buffer at {Ticks.to_shortstring(timestamp).split('.')[0]} window out of order...")
  
         # Provide user feedback on data reception
         if not self.display_measurementsummary or time() - self._lastmessage < 5.0:
@@ -510,6 +463,8 @@ class DataProxy(Subscriber):
         if self._process_lock.acquire(False):
             try:
                 processstarted = time()
+
+                self._batch_counter += 1
 
                 if self._groupeddata_receiver is not None:
                     self._groupeddata_receiver(self, timestamp, databuffer)
@@ -563,17 +518,12 @@ class DataProxy(Subscriber):
             for name, value in settings.items():
                 if name in self._connection_string_params:
                     default_value = self._connection_string_params[name]
-                    value_type = type(default_value)
 
                     try:
-                        if value_type == bool:
-                            # Special handling for boolean values
-                            parsed_value = value.lower() in ("true", "1", "yes")
-                        else:
-                            parsed_value = value_type(value)
-
+                        parsed_value = self._parse_type(value, default_value)
                         setattr(self, name, parsed_value)
                         self.statusmessage(f"Updated adapter property \"{name}\" to value: {parsed_value}")
+
                     except Exception as ex:
                         self.errormessage(f"Failed to parse and set adapter property \"{name}\" with value \"{value}\": {ex}")
                 else:
@@ -581,6 +531,26 @@ class DataProxy(Subscriber):
         else:
             self.statusmessage(f"Received unhandled user response {response} for command {command} from WaveApps host proxy publisher.")
 
+    def _parse_type(self, value: str, defaultValue: Any) -> Any:
+        """
+        Parses a string value into the type of the given value.
+        """
+        valueType = type(defaultValue)
+
+        if valueType == bool:
+            # Special handling for boolean values
+            parsed_value = value.lower() in ("true", "1", "yes")
+        if valueType == list:
+            # Special handling for list values, assuming comma-separated values
+            if (len(defaultValue) > 0):
+                parsed_value = [self._parse_type(item, defaultValue[0]) for item in value.split(',')]
+            else:
+               parsed_value = valueType(defaultValue) 
+        else:
+            parsed_value = valueType(value)
+
+        return parsed_value
+    
     def _publisher_status(self, message):
         self.statusmessage(f"[PUB] {message}")
     
@@ -636,3 +606,13 @@ class DataProxy(Subscriber):
         
         self._connection_string_params[name] = value
         return value
+    
+    def _update_pow_phasor(self, dataset: Dataset):
+        """
+        Updates the POW phasor information in the metadata cache.
+        """   
+        for measurement in self.metadatacache.measurement_records:
+            if measurement.signalacronym == "VPOW" or measurement.signalacronym == "IPOW":
+                datarow: DataRow = dataset["MeasurementDetail"].rowswhere(lambda row: row["SignalID"] == str(measurement.signalid))
+                if measurement.phasor is None and len(datarow) == 1:
+                    measurement.phasor = next((phasor for phasor in self.metadatacache.phasor_records if phasor.sourceindex == datarow[0]["PhasorSourceIndex"] and phasor.deviceacronym == datarow[0]["DeviceAcronym"]), None)
